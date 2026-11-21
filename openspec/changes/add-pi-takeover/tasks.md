@@ -23,7 +23,7 @@
 
 ## 3. Installation
 
-- [ ] 3.1 Add `pi-takeover` to `install.sh`: the `link_cmd` loop and the PATH-commands comment
+- [x] 3.1 Add `pi-takeover` to `install.sh`: the `link_cmd` loop and the PATH-commands comment
       header. `./install.sh --dry-run` previews the new link without creating it.
       Commit: `feat: install pi-takeover command link`.
 
