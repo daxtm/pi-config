@@ -11,7 +11,7 @@
 
 ## 2. Bootstrap and handoff
 
-- [ ] 2.1 For the Milestone 1 both-absent case only, capture HEAD before any network step, then
+- [x] 2.1 For the Milestone 1 both-absent case only, capture HEAD before any network step, then
       push `"$head":refs/heads/main` and `"$head":refs/heads/test` to origin with explicit
       `--force-with-lease=refs/heads/main:` and `--force-with-lease=refs/heads/test:` (empty expected
       values: creation only, no existing-ref updates, no local branches, checkout untouched).

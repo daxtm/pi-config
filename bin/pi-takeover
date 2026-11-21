@@ -35,4 +35,24 @@ if [[ -n "$conflicts" ]]; then
 	exit 1
 fi
 
-echo "pi-takeover: $dir validated (HEAD $head, origin has neither main nor test)"
+# ---- bootstrap: create both branches at the captured HEAD (creation-only leases) ------------
+# Each empty expected value permits creating the ref but never moving an existing one, so a branch
+# created concurrently between the ls-remote check and this push makes the push fail instead of
+# being overwritten. No local branches are created and the checkout is untouched.
+if ! push_err="$(git push --force-with-lease=refs/heads/main: --force-with-lease=refs/heads/test: \
+	origin "$head":refs/heads/main "$head":refs/heads/test 2>&1)"; then
+	echo "pi-takeover: creating origin/main and origin/test failed — no GitHub setup was run:" >&2
+	printf '%s\n' "$push_err" | sed 's/^/           /' >&2
+	exit 1
+fi
+echo "pi-takeover: created origin/main and origin/test at $head"
+
+# ---- handoff: the kit's GitHub settings and rulesets, same repo, output and status verbatim ---
+kit_dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+"$kit_dir/pi-gh-setup" "$dir"
+
+echo
+echo "takeover    baseline $head"
+echo "takeover    created origin/main and origin/test at $head"
+echo "takeover    github settings + rulesets: applied (see above)"
+echo "next        run inside $dir:  pi-branch chore/repo-baseline"
