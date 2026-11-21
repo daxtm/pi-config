@@ -47,6 +47,11 @@ while read -r glob lines words; do
 	done
 done < budgets.conf
 (( fail == before )) && echo "ok   budgets"
+
+before=$fail
+bash "$ROOT/scripts/test-research-contract.sh" || bad "research contract checks (see FAIL lines above)"
+(( fail == before )) && echo "ok   research contract checks"
+
 if [[ -n "${GITHUB_BASE_REF:-}" ]] && git diff --name-only "origin/$GITHUB_BASE_REF...HEAD" 2>/dev/null | grep -qx budgets.conf; then
 	echo "::warning file=budgets.conf::This PR changes the prompt budgets — make sure that's on purpose"
 fi

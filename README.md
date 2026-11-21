@@ -17,7 +17,9 @@ fixes; **scripts and GitHub Actions run the process** (see [ADR-0002](docs/adr/0
 | `/cleanup` | deletes local branches that no longer exist on GitHub (`--dry-run` lists them) | script | 0 |
 
 Also: `/fix <symptom>` (or `/fix ci` when the PR's CI is red), `/roadmap <big idea>` then
-`/propose next`, `/research <question>`, `/adr <decision>`, `/commit`. Tiny edits: just ask — the
+`/propose next`, `/research <question>` (standalone answer by default; project look-ups only when
+the question names this project, a repo, or a path — see
+[ADR-0005](docs/adr/0005-explicit-research-scope.md)), `/adr <decision>`, `/commit`. Tiny edits: just ask — the
 main session does them on a `chore/` branch, then `/ship`.
 
 Scripts (no model): `/ship`, `/cleanup [--dry-run]`, `/switch [branch]`, `/test-branch [rebuild]`, `/live …`, `/pinew <name>`,
