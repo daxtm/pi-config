@@ -319,6 +319,20 @@ printf '#!/bin/bash\nexit 1\n' > scripts/check.sh
 git add scripts/check.sh; git commit -qm broken
 check "ship refuses failing candidate" bash -c '! pi-ship'
 check "failed ship creates no PR" test ! -e "$GH/prs/fix_other"
+C="$T/preview-conflict"
+git init -qb main "$C"; cd "$C" || exit 1
+mkdir scripts
+printf '#!/bin/sh\ntest -s common.txt\n' > scripts/check.sh; chmod +x scripts/check.sh
+echo base > common.txt; git add .; git commit -qm base
+git switch -qc fix/first
+echo first > common.txt; git commit -qam first
+sync
+good="$(git rev-parse test)"
+git switch -qc fix/second main
+echo second > common.txt; git commit -qam second
+check "new preview conflict stops sync" bash -c '! pi-test-branch sync'
+check "new preview conflict preserves last passing commit" test "$(git rev-parse test)" = "$good"
+check "new preview conflict never invokes the model" test ! -e .git/pi-test-branch-resolve.log
 # ---- pr-only guard -----------------------------------------------------------------------------
 echo "guards"
 ESBUILD=(npx -y esbuild@0.28.2)

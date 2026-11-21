@@ -118,6 +118,20 @@ info "Configuring $AGENT_DIR"
 OLD_MANIFEST=()
 [[ -f "$AGENT_DIR/.kit-manifest" ]] && mapfile -t OLD_MANIFEST < "$AGENT_DIR/.kit-manifest"
 
+# subagent extension: Pi's official example for the pi version you run
+if (( DRY_RUN )); then
+	echo "   [dry-run] fetch the subagent example from $PI_PKG@$PI_HAVE"
+	MANIFEST+=(extensions/subagent/index.ts extensions/subagent/agents.ts)
+else
+	mkdir -p "$TMP_DIR/pi-pkg"
+	tarball="$(npm pack --silent --pack-destination "$TMP_DIR/pi-pkg" "$PI_PKG@$PI_HAVE" | tail -n1)"
+	tar -xzf "$TMP_DIR/pi-pkg/$tarball" -C "$TMP_DIR/pi-pkg" package/examples/extensions/subagent
+	python3 "$KIT_DIR/lib/patch-subagent.py" "$TMP_DIR/pi-pkg/package/examples/extensions/subagent/index.ts"
+	for f in index.ts agents.ts; do
+		install_file "$TMP_DIR/pi-pkg/package/examples/extensions/subagent/$f" "$AGENT_DIR/extensions/subagent/$f"
+	done
+fi
+
 install_file "$KIT_DIR/global/AGENTS.md" "$AGENT_DIR/AGENTS.md"
 install_file "$KIT_DIR/global/MAIN.md" "$AGENT_DIR/MAIN.md"
 for f in "$KIT_DIR"/global/extensions/*.ts; do
@@ -129,21 +143,22 @@ for f in "$KIT_DIR"/global/prompts/*.md; do render "$f" "$AGENT_DIR/prompts/$(ba
 while IFS= read -r -d '' f; do install_file "$f" "$AGENT_DIR/skills/${f#"$KIT_DIR/global/skills/"}"; done \
 	< <(find "$KIT_DIR/global/skills" -type f -print0)
 
-# subagent extension: Pi's official example for the pi version you run
-if (( DRY_RUN )); then
-	echo "   [dry-run] fetch the subagent example from $PI_PKG@$PI_HAVE"
-	MANIFEST+=(extensions/subagent/index.ts extensions/subagent/agents.ts)
-else
-	mkdir -p "$TMP_DIR/pi-pkg"
-	tarball="$(npm pack --silent --pack-destination "$TMP_DIR/pi-pkg" "$PI_PKG@$PI_HAVE" | tail -n1)"
-	tar -xzf "$TMP_DIR/pi-pkg/$tarball" -C "$TMP_DIR/pi-pkg" package/examples/extensions/subagent
-	for f in index.ts agents.ts; do
-		install_file "$TMP_DIR/pi-pkg/package/examples/extensions/subagent/$f" "$AGENT_DIR/extensions/subagent/$f"
-	done
+# Resolve the bundled defaults from the authenticated catalog once per install.
+KNOWN=""
+if (( ! DRY_RUN )); then
+	KNOWN="$(PI_CODING_AGENT_DIR="$AGENT_DIR" timeout 60 "$PI_BIN" --list-models 2>/dev/null | awk 'NR>1 {print $1"/"$2}' || true)"
 fi
-
-# agents, with models from agent-models.conf
-model_for() { grep -E "^[[:space:]]*$1[[:space:]]*=" "$MODELS_CONF" | tail -n1 | cut -d= -f2- | sed -E 's/#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//'; }
+SOL=openai/gpt-6.1-sol
+if grep -qxF openai/gpt-6.2-sol <<<"$KNOWN"; then SOL=openai/gpt-6.2-sol; fi
+if (( ! DRY_RUN )); then printf '%s\n' "$SOL" > "$KIT_DIR/.kit-sol"; fi
+model_for() {
+	local model
+	model="$(sed -n "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*//p" "$MODELS_CONF" | tail -n1 | sed -E 's/[[:space:]]*#.*$//; s/[[:space:]]+$//')"
+	case "$model" in
+	openai/gpt-6.1-sol:*) model="$SOL:${model##*:}" ;;
+	esac
+	printf '%s\n' "$model"
+}
 for f in "$KIT_DIR"/global/agents/*.md; do
 	agent="$(basename "$f" .md)"; model="$(model_for "$agent")"
 	if [[ -n "$model" ]]; then sed "s|^{{MODEL_LINE}}\$|model: $model|" "$f" > "$TMP_DIR/$agent.md"
@@ -289,9 +304,8 @@ fi
 
 # ---- 8. model IDs pi doesn't know ---------------------------------------------------------
 if (( ! DRY_RUN )); then
-	KNOWN="$(PI_CODING_AGENT_DIR="$AGENT_DIR" timeout 60 "$PI_BIN" --list-models 2>/dev/null | awk 'NR>1 {print $1"/"$2}' || true)"
 	if [[ -n "$KNOWN" ]]; then
-		for role in main spec build debugger resolver researcher; do
+		for role in main spec build debugger resolver researcher repair; do
 			m="$(model_for "$role")"; [[ -n "$m" ]] || continue
 			id="$m"; [[ "${m##*:}" =~ ^(off|minimal|low|medium|high|xhigh|max)$ ]] && id="${m%:*}"
 			grep -qxF "$id" <<<"$KNOWN" || warn "$role: pi doesn't list '$id' — log in to ${id%%/*} with /login (check: pi --list-models)"

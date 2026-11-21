@@ -15,7 +15,7 @@ version="$( (sha256sum < "$kit/bin/pi-check"; command -v openspec || true; node 
 key="$cache/$sha-$version"
 exec 8>"$key.lock"; flock 8
 if [[ "$mode" != force && -f "$key.ok" ]]; then echo "Local checks passed $sha (cached)"; exit 0; fi
-if [[ "$mode" == cached && -f "$key.failed" ]]; then tail -n 12 "$key.failed" >&2; echo "Retry: pi-check --force $sha" >&2; exit 1; fi
+if [[ "$mode" == cached && -f "$key.failed" ]]; then tail -n 12 "$key.failed" | cut -c1-240 >&2; echo "Full log: $key.failed" >&2; echo "Retry: pi-check --force $sha" >&2; exit 1; fi
 tmp="$(mktemp -d)"
 cleanup() { git -c core.hooksPath=/dev/null worktree remove --force "$tmp/wt" >/dev/null 2>&1 || true; rm -rf -- "$tmp"; }
 trap cleanup EXIT
@@ -39,6 +39,6 @@ set +e
 validate > "$tmp/log" 2>&1
 rc=$?
 set -e
-if (( rc )); then mv "$tmp/log" "$key.failed"; tail -n 25 "$key.failed" >&2; echo "Local checks failed $sha (log: $key.failed)" >&2; exit "$rc"; fi
+if (( rc )); then mv "$tmp/log" "$key.failed"; tail -n 12 "$key.failed" | cut -c1-240 >&2; echo "Local checks failed $sha (exit $rc, log: $key.failed)" >&2; exit "$rc"; fi
 rm -f "$key.failed"; mv "$tmp/log" "$key.ok"
 echo "Local checks passed $sha"

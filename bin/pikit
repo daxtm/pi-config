@@ -98,9 +98,12 @@ repair)
 	exec 7>"$wt.lock"; flock 7
 	if [[ ! -e "$wt" ]]; then
 		D worktree add -q -b "$branch" "$wt" "$base"
-		model="$(sed -n 's/^build[[:space:]]*=[[:space:]]*//p' "$wt/agent-models.conf" | cut -d' ' -f1)"
-		[[ -n "$model" ]] || die 'missing build model'
-		(cd "$wt" && PI_TEST_BRANCH=1 timeout 1800 pi -p --no-session --model "$model" --tools read,grep,find,ls,bash,edit,write "Repair this kit defect: $issue. Reproduce it with an isolated regression, implement the fix, commit only relevant changes here. Do not deploy or push.") || die "builder stopped; inspect $wt"
+		model="$(sed -n 's/^repair[[:space:]]*=[[:space:]]*//p' "$wt/agent-models.conf" | cut -d' ' -f1)"
+		if [[ "$model" == openai/gpt-6.1-sol:* && -f "$DEPLOY/.kit-sol" ]]; then
+			[[ "$(<"$DEPLOY/.kit-sol")" == openai/gpt-6.2-sol ]] && model="openai/gpt-6.2-sol:${model##*:}"
+		fi
+		[[ -n "$model" ]] || die 'missing repair model'
+		(cd "$wt" && PI_TEST_BRANCH=1 timeout 1800 pi -p --no-session --model "$model" --tools read,grep,find,ls,bash,edit,write "Repair this kit defect: $issue. Reproduce it with an isolated regression, implement the fix, commit only relevant changes here. Do not deploy or push.") || die "repair agent stopped; inspect $wt"
 	fi
 	cd "$wt"
 	[[ "$(git branch --show-current)" == "$branch" && -z "$(git status --porcelain)" && "$(git rev-parse HEAD)" != "$base" ]] || die "incomplete repair at $wt"

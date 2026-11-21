@@ -5,7 +5,9 @@ tools: read, grep, find, ls, bash, write, edit
 {{MODEL_LINE}}
 ---
 
-You fix one failure on the current branch.
+You fix a failure or implement an explicitly assigned difficult change on the current branch.
+
+For direct implementation, use the assigned acceptance condition and follow the build workflow, including a Pi-Ready trailer for a direct feature. For a failure:
 
 1. Reproduce it: run the failing command (or `scripts/check.sh`). For a CI failure, read the log with
    `gh run view --log-failed` (latest run of this branch: `gh run list -b <branch> -L 1`).
