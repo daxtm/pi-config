@@ -11,9 +11,11 @@
 
 ## 2. Bootstrap and handoff
 
-- [ ] 2.1 Capture the HEAD SHA before any network step, then
-      `git push origin "$head":refs/heads/main "$head":refs/heads/test` (no force, no local
-      branches, checkout untouched). On success invoke the sibling `pi-gh-setup` (resolved from
+- [ ] 2.1 For the Milestone 1 both-absent case only, capture HEAD before any network step, then
+      push `"$head":refs/heads/main` and `"$head":refs/heads/test` to origin with explicit
+      `--force-with-lease=refs/heads/main:` and `--force-with-lease=refs/heads/test:` (empty expected
+      values: creation only, no existing-ref updates, no local branches, checkout untouched).
+      Do not add optional-test or partial-bootstrap paths. On success invoke the sibling `pi-gh-setup` (resolved from
       the script's own real path) on the same directory, passing its output and exit status
       through, including the private-repo warning. Print the baseline SHA, the two created
       branches, the setup outcome, and `pi-branch chore/repo-baseline` as the next command;

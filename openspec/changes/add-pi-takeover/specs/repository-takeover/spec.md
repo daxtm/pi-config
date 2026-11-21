@@ -25,7 +25,7 @@ Provide a script-owned, one-time bootstrap for existing GitHub repositories with
 
 ### Requirement: Refuse any existing bootstrap branch
 
-The command SHALL inspect live remote `refs/heads/main` and `refs/heads/test`, not rely on local branches or cached remote-tracking refs. If either exists, it SHALL exit nonzero, identify the conflict, leave all remote branches unchanged, and not run GitHub setup. A failed remote lookup SHALL NOT count as proof that branches are absent.
+The command SHALL inspect live remote `refs/heads/main` and `refs/heads/test`, not rely on local branches or cached remote-tracking refs. If either exists, it SHALL exit nonzero, identify the conflict, leave all remote branches unchanged, and not run GitHub setup. A failed remote lookup SHALL NOT count as proof that branches are absent. Milestone 1 SHALL support only the both-absent case, not an optional-test mode or creation of just the missing branch.
 
 #### Scenario: Only main exists remotely
 
@@ -49,7 +49,7 @@ The command SHALL inspect live remote `refs/heads/main` and `refs/heads/test`, n
 
 ### Requirement: Bootstrap both branches from current HEAD
 
-When neither remote branch exists, the command SHALL create and push both main and test to origin at the same captured current HEAD commit without force-pushing or overwriting existing branches. It SHALL preserve the local checkout, uncommitted files, existing local branches, unrelated remote branches, and GitHub default branch.
+When neither remote branch exists, the command SHALL create and push both main and test to origin at the same captured current HEAD commit without permitting forced updates or overwriting existing branches. It SHALL preserve the local checkout, uncommitted files, existing local branches, unrelated remote branches, and GitHub default branch.
 
 #### Scenario: Successful bootstrap from a legacy branch
 
@@ -83,7 +83,7 @@ After both branches are created successfully, the command SHALL invoke the kit's
 
 ### Requirement: Report the work completed and the next ordinary branch
 
-On successful completion, the command SHALL report the baseline commit, remote branch creation, GitHub setup outcome, and `pi-branch chore/repo-baseline` as the next command. It SHALL NOT create or switch to that work branch or make a project commit. Bootstrap SHALL NOT grant agents permission to push protected branches directly.
+On successful completion, the command SHALL report the baseline commit, remote branch creation, GitHub setup outcome, and `pi-branch chore/repo-baseline` as the next command. It SHALL NOT create or switch to that work branch or make a project commit. Bootstrap SHALL NOT suspend or relax existing agent restrictions at any point or grant agents permission to push protected branches directly.
 
 #### Scenario: Successful handoff output
 
