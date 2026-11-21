@@ -4,7 +4,7 @@ Each checkbox is one small implementation commit. Keep `budgets.conf` unchanged.
 
 ## 1. Standalone research contract
 
-- [ ] 1.1 Update `global/prompts/research.md` and `global/agents/researcher.md` together: question-only standalone/web-only default, no local tools or project inference, explicit scoped read-only opt-in, no local fallback on web failure, empty-question clarification, and concise cited output without task steering. Retain existing web/local tool declarations and parallel research support. Add `scripts/test-research-contract.sh` with body/frontmatter assertions and in-memory negative fixtures for these clauses; verify it passes and that removing the default/no-local-tools/non-steering clauses makes its checks fail. Run `scripts/check.sh` to confirm both files fit their unchanged budgets.
+- [x] 1.1 Update `global/prompts/research.md` and `global/agents/researcher.md` together: question-only standalone/web-only default, no local tools or project inference, explicit scoped read-only opt-in, no local fallback on web failure, empty-question clarification, and concise cited output without task steering. Retain existing web/local tool declarations and parallel research support. Add `scripts/test-research-contract.sh` with body/frontmatter assertions and in-memory negative fixtures for these clauses; verify it passes and that removing the default/no-local-tools/non-steering clauses makes its checks fail. Run `scripts/check.sh` to confirm both files fit their unchanged budgets.
 
 ## 2. Main-session non-steering boundary
 
