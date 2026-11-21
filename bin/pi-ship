@@ -138,7 +138,7 @@ else
 		if (( ${#adrs[@]} )); then echo; echo "## Decisions"; printf -- '- `%s`\n' "${adrs[@]}"; fi
 		echo
 		echo "---"
-		echo "Local checks passed for `$new`. Merge with **Create a merge commit**."
+		echo "Local checks passed for $new. Merge with **Create a merge commit**."
 	} > "$body"
 	type="${branch%%/*}"; slug="${branch#*/}"
 	url="$(cd "$root" && gh pr create --base main --head "$branch" --title "$type: ${slug//-/ }" --body-file "$body")" \
