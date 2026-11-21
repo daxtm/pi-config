@@ -7,6 +7,12 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 cd "$ROOT"
+# The installed kit may keep OpenSpec outside the invoking shell's PATH.
+# shellcheck disable=SC1091
+if [[ -f "$ROOT/.kit-paths" ]]; then
+	. "$ROOT/.kit-paths"
+	[[ -z "${KIT_NPM_BIN:-}" ]] || export PATH="$KIT_NPM_BIN:$PATH"
+fi
 fail=0
 bad() { echo "FAIL $*"; fail=1; }
 
@@ -21,15 +27,17 @@ fi
 (( fail == before )) && echo "ok   ${#scripts[@]} shell scripts"
 
 
-if command -v npx >/dev/null; then
+ESBUILD=(npx -y esbuild@0.28.2)
+command -v esbuild >/dev/null && ESBUILD=(esbuild)
+if command -v esbuild >/dev/null || command -v npx >/dev/null; then
 	n=0; before=$fail
 	for f in global/extensions/*.ts; do
-		npx -y esbuild@0.28.2 "$f" --log-level=error >/dev/null || bad "TypeScript syntax: $f"
+		"${ESBUILD[@]}" "$f" --log-level=error >/dev/null || bad "TypeScript syntax: $f"
 		n=$((n + 1))
 	done
 	(( fail == before )) && echo "ok   $n extensions parse"
 else
-	echo "skip extension syntax (no npx)"
+	bad "extension syntax requires esbuild or npx"
 fi
 
 shopt -s nullglob

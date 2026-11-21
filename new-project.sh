@@ -59,27 +59,35 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { git init -q -b main; ec
 HAS_HEAD=0; git rev-parse -q --verify HEAD >/dev/null && HAS_HEAD=1
 HAS_ORIGIN=0; git remote get-url origin >/dev/null 2>&1 && HAS_ORIGIN=1
 SETUP_BRANCH=""; RETURN_TO=""
-if (( HAS_HEAD && HAS_ORIGIN )); then
+# Existing projects always receive setup on a work branch. Local-only setup disables the
+# automatic remote sync too, so --no-github cannot push through the test-branch hook.
+if (( GITHUB )); then git config --local --unset pi.github 2>/dev/null || true
+else git config --local pi.github false; fi
+mapfile -d '' -t USER_UNTRACKED < <(git ls-files --others --exclude-standard -z)
+if (( HAS_HEAD )); then
 	[ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "ERROR: commit or stash your changes first (git status)" >&2; exit 1; }
-	git fetch -q origin
-	if ! git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
-		# Takeover: GitHub has no main. Create it from local main, else GitHub's default branch, else HEAD.
-		src=""; from=""
-		if git rev-parse -q --verify refs/heads/main >/dev/null; then src="$(git rev-parse refs/heads/main)"; from="your local main"
-		else
-			def="$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\)[[:space:]]*HEAD$|\1|p')"
-			if [ -n "$def" ] && git rev-parse -q --verify "refs/remotes/origin/$def" >/dev/null; then
-				src="$(git rev-parse "refs/remotes/origin/$def")"; from="GitHub's default branch $def"
-			else src="$(git rev-parse HEAD)"; from="the current commit"; fi
+	if (( HAS_ORIGIN && GITHUB )); then
+		git fetch -q --prune origin
+		if ! git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
+			src=""; from=""
+			if git rev-parse -q --verify refs/heads/main >/dev/null; then src="$(git rev-parse refs/heads/main)"; from="your local main"
+			else
+				def="$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\)[[:space:]]*HEAD$|\1|p')"
+				if [ -n "$def" ] && git rev-parse -q --verify "refs/remotes/origin/$def" >/dev/null; then
+					src="$(git rev-parse "refs/remotes/origin/$def")"; from="GitHub's default branch $def"
+				else src="$(git rev-parse HEAD)"; from="the current commit"; fi
+			fi
+			git push -q --force-with-lease=refs/heads/main: origin "$src:refs/heads/main" \
+				|| { echo "ERROR: couldn't create main on GitHub (nothing else was changed)" >&2; exit 1; }
+			git fetch -q origin
+			echo "github     the repo had no main — created it from $from (${src:0:7})"
 		fi
-		git push -q --force-with-lease=refs/heads/main: origin "$src:refs/heads/main" \
-			|| { echo "ERROR: couldn't create main on GitHub (nothing else was changed)" >&2; exit 1; }
-		git fetch -q origin
-		echo "github     the repo had no main — created it from $from (${src:0:7})"
 	fi
 	RETURN_TO="$(git branch --show-current)"
-	SETUP_BRANCH="chore/pi-setup-$(date +%Y%m%d-%H%M%S)"
-	base="main"; git rev-parse -q --verify refs/remotes/origin/main >/dev/null && base="origin/main"
+	SETUP_BRANCH="chore/pi-setup-$(date +%Y%m%d-%H%M%S)-$$"
+	base=HEAD
+	if (( GITHUB && HAS_ORIGIN )); then base=origin/main
+	elif git rev-parse -q --verify refs/heads/main >/dev/null; then base=main; fi
 	git switch -q --no-track -c "$SETUP_BRANCH" "$base"
 	echo "git        setup goes on $SETUP_BRANCH (from $base)"
 fi
@@ -144,8 +152,15 @@ for hook in post-commit post-merge post-rewrite; do
 done
 echo "git        hooks keep the test branch up to date"
 
-# 6. Commit the setup
-git add -A
+# 6. Commit the setup; existing projects retain their unrelated untracked files.
+if (( HAS_HEAD )); then
+	git add -u
+	while IFS= read -r -d '' file; do
+		keep=0
+		for prior in "${USER_UNTRACKED[@]}"; do [[ "$file" != "$prior" ]] || { keep=1; break; }; done
+		(( keep )) || git add -- "$file"
+	done < <(git ls-files --others --exclude-standard -z)
+else git add -A; fi
 if git diff --cached --quiet; then
 	echo "git        nothing new to commit"
 else

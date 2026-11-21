@@ -19,7 +19,7 @@ check() { local name="$1"; shift; if "$@" >/dev/null 2>&1; then pass "$name"; el
 for c in git node; do command -v "$c" >/dev/null || { echo "test-workflow: $c is required"; exit 1; }; done
 if ! command -v openspec >/dev/null; then
 	[[ -n "${CI:-}" ]] && { echo "test-workflow: openspec is required in CI"; exit 1; }
-	echo "  skip workflow tests (openspec not on PATH)"; exit 0
+	echo "test-workflow: openspec is required (run pikit apply or install @fission-ai/openspec@2.1.1)" >&2; exit 1
 fi
 
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
@@ -82,6 +82,7 @@ ln -s "$ROOT/new-project.sh" "$H/.local/bin/pinew"
 export HOME="$H" FAKEGH="$GH" PI_CODING_AGENT_DIR="$H/.pi/agent" OPENSPEC_TELEMETRY=0
 export PATH="$STUBS:$H/.local/bin:$PATH" GIT_CONFIG_NOSYSTEM=1
 unset GIT_DIR GIT_WORK_TREE GITHUB_ACTIONS
+export PI_TEST_BRANCH=1   # each scenario syncs explicitly; hooks must not race its assertions
 P="$H/workspace/projects"
 remote_has() { git -C "$GH/repos/$1.git" rev-parse -q --verify "refs/heads/$2" >/dev/null; }
 default_of() { git -C "$GH/repos/$1.git" symbolic-ref --short HEAD; }
@@ -158,8 +159,9 @@ pi-test-branch cleanup >/dev/null 2>&1
 check "cleanup deletes a branch gone from GitHub" bash -c "! git rev-parse -q --verify refs/heads/feat/add-hello"
 check "cleanup keeps a merged branch you kept on GitHub" git rev-parse -q --verify refs/heads/fix/greeting
 check "cleanup never touches a never-pushed branch" git rev-parse -q --verify refs/heads/local-wip
-git branch -q feat/gone origin/main; git push -q -u origin feat/gone 2>/dev/null; git -C "$GH/repos/demo.git" branch -q -D feat/gone; git fetch -q --prune
-sync
+git branch -q feat/gone origin/main; git push -q -u origin feat/gone 2>/dev/null; git switch -q feat/gone; echo pending > pending; git add pending; git commit -q -m pending; git switch -q main
+git -C "$GH/repos/demo.git" branch -q -D feat/gone
+sync --fetch
 check "a branch you deleted on GitHub is never pushed back" bash -c "! git -C '$GH/repos/demo.git' rev-parse -q --verify refs/heads/feat/gone"
 check "test contains everything merged to main" git merge-base --is-ancestor origin/main test
 
@@ -176,9 +178,64 @@ gh_merge pi-config chore/try
 "$ROOT/bin/pikit" apply --if-changed --quiet >/dev/null 2>&1
 check "after merging, pikit goes back to following main" bash -c "'$ROOT/bin/pikit' status | grep -q 'follows main'"
 
+# ---- recovery regressions ----------------------------------------------------------------------
+echo "recovery"
+cd "$D" || exit 1
+pi-branch fix/missing-tasks >/dev/null 2>&1
+mkdir -p openspec/changes/missing-tasks
+echo '## Why' > openspec/changes/missing-tasks/proposal.md
+git add openspec; git commit -q -m 'propose without tasks'; sync
+check "active change without tasks stays out of test" bash -c '! git merge-base --is-ancestor fix/missing-tasks test'
+
+# Rebuild's zero-merge path must discard an old test tip, including in its live worktree.
+R="$P/rebuild"; git init -q --bare -b main "$GH/repos/rebuild.git"
+git clone -q "$GH/repos/rebuild.git" "$R" 2>/dev/null
+cd "$R" || exit 1
+echo base > base; git add base; git commit -q -m base; git push -q -u origin main 2>/dev/null
+git switch -q -c fix/abandoned; echo abandoned > abandoned; git add abandoned; git commit -q -m abandoned
+sync; pi-test-branch live-set "$T/rebuild-live" >/dev/null 2>&1
+git switch -q main; git branch -q -D fix/abandoned
+# Remove the branch remotely, as an owner would; rebuild fetches/prunes before syncing.
+git -C "$GH/repos/rebuild.git" branch -q -D fix/abandoned
+pi-test-branch rebuild > "$LOG/rebuild.txt" 2>&1
+check "rebuild with nothing eligible resets local test to main" test "$(git rev-parse test)" = "$(git rev-parse main)"
+check "rebuild with nothing eligible resets remote test to main" test "$(git -C "$GH/repos/rebuild.git" rev-parse test)" = "$(git rev-parse main)"
+check "rebuild updates the live worktree" test ! -e "$T/rebuild-live/abandoned"
+
+# --no-github must not create remote main, call gh or push any branch.
+git init -q --bare -b legacy "$GH/repos/offline.git"; echo PUBLIC > "$GH/repos/offline.git.vis"
+git clone -q "$GH/repos/offline.git" "$P/offline" 2>/dev/null
+cd "$P/offline" || exit 1
+echo base > base; git add base; git commit -q -m base; git push -q -u origin legacy 2>/dev/null
+before_refs="$(git -C "$GH/repos/offline.git" show-ref)"; before_calls="$(wc -l < "$GH/calls.log")"
+echo 'user work' > unrelated.txt
+pinew --no-github > "$LOG/pinew-offline.txt" 2>&1
+check "pinew --no-github succeeds on an existing remote project" grep -q 'Next:' "$LOG/pinew-offline.txt"
+check "pinew --no-github leaves all remote refs unchanged" test "$(git -C "$GH/repos/offline.git" show-ref)" = "$before_refs"
+check "pinew --no-github makes no GitHub API calls" test "$(wc -l < "$GH/calls.log")" = "$before_calls"
+check "pinew keeps unrelated user files untracked" test "$(git ls-files -- unrelated.txt)" = ''
+check "pinew leaves unrelated user file contents intact" grep -qx 'user work' unrelated.txt
+
+# A failed installation still leaves the checkout at the requested SHA: checkout equality isn't success.
+git -C "$K" switch -q -c chore/retry origin/main
+cat > "$K/install.sh" <<'EOF'
+#!/usr/bin/env bash
+echo attempt >> "$HOME/install-attempts"
+[[ -f "$HOME/allow-install" ]]
+EOF
+git -C "$K" add install.sh; git -C "$K" commit -q -m 'installer retry fixture'; git -C "$K" push -q -u origin chore/retry 2>/dev/null
+check "pikit reports an installation failure" bash -c "! '$ROOT/bin/pikit' use chore/retry"
+touch "$H/allow-install"
+"$ROOT/bin/pikit" apply --if-changed --quiet > "$LOG/pikit-retry.txt" 2>&1
+check "pikit retries a failed installation at the same SHA" test "$(wc -l < "$H/install-attempts")" = 2
+"$ROOT/bin/pikit" apply --if-changed --quiet >/dev/null 2>&1
+check "pikit skips a successfully installed unchanged SHA" test "$(wc -l < "$H/install-attempts")" = 2
+
 # ---- pr-only guard -----------------------------------------------------------------------------
 echo "guards"
-if command -v npx >/dev/null && npx -y esbuild@0.28.2 "$ROOT/global/extensions/pr-only.ts" --bundle --platform=node \
+ESBUILD=(npx -y esbuild@0.28.2)
+command -v esbuild >/dev/null && ESBUILD=(esbuild)
+if "${ESBUILD[@]}" "$ROOT/global/extensions/pr-only.ts" --bundle --platform=node \
 	--format=cjs --external:@earendil-works/pi-coding-agent --outfile="$T/pr-only.cjs" --log-level=error >/dev/null 2>&1; then
 	cat > "$T/guard.cjs" <<'EOF'
 const ext = require(process.argv[2]).default; let h; let branch = "feat/x";
@@ -201,7 +258,7 @@ EOF
 	if node "$T/guard.cjs" "$T/pr-only.cjs" > "$LOG/guard.txt" 2>&1; then pass "pr-only blocks merges, deletes, main/test pushes, main-session pi-config edits; allows normal work"
 	else fail "pr-only guard: $(head -n3 "$LOG/guard.txt" | tr '\n' ' ')"; fi
 else
-	echo "  skip pr-only guard test (no npx/esbuild)"
+	fail "pr-only guard could not compile (esbuild is required)"
 fi
 
 echo

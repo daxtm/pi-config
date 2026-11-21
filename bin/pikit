@@ -46,6 +46,9 @@ target_of() { # branch -> sha to deploy (GitHub's copy if it's newer), empty if 
 
 deploy() {
 	local b want have
+	mkdir -p "$LOGDIR"
+	exec 8>"$LOGDIR/deploy.lock"
+	flock 8   # serialize target selection, checkout, install and success recording
 	D fetch -q --prune origin 2>/dev/null || say "pikit: couldn't reach GitHub — using what's local"
 	b="$(followed)"
 	want="$(target_of "$b")"
@@ -60,14 +63,17 @@ deploy() {
 	fi
 	[[ -n "$want" ]] || die "nothing to deploy (no main branch)"
 	have="$(git -C "$DEPLOY" rev-parse HEAD 2>/dev/null || true)"
-	if (( IF_CHANGED )) && [[ "$want" == "$have" ]]; then return 0; fi
+	if (( IF_CHANGED )) && [[ "$want" == "$have" && -f "$LOGDIR/installed.sha" ]] \
+		&& [[ "$(cat "$LOGDIR/installed.sha")" == "$want" ]]; then return 0; fi
 	if [[ -n "$(git -C "$DEPLOY" status --porcelain --untracked-files=no)" ]]; then
 		die "files were edited in $DEPLOY — never edit the deployed copy. Reset it: git -C $DEPLOY checkout -- . && pikit apply"
 	fi
 	git -C "$DEPLOY" -c core.hooksPath=/dev/null checkout -q --detach "$want"
 	mkdir -p "$LOGDIR"
 	echo "=== $(date '+%F %T') deploying $b @ ${want:0:7}" >> "$LOG"
-	if PIKIT_DEPLOYING=1 flock "$LOGDIR/deploy.lock" "$DEPLOY/install.sh" >> "$LOG" 2>&1; then
+	rm -f "$LOGDIR/installed.sha"   # a failed attempt cannot retain a success marker
+	if PIKIT_DEPLOYING=1 "$DEPLOY/install.sh" >> "$LOG" 2>&1; then
+		printf '%s\n' "$want" > "$LOGDIR/installed.sha"
 		echo "pi-config: deployed $b @ $(git -C "$DEPLOY" log -1 --format='%h %s') — /reload (or a new pi session) to use it"
 	else
 		die "install.sh failed for $b @ ${want:0:7} (log: $LOG). Go back: pikit use main"

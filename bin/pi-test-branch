@@ -77,7 +77,7 @@ TMPD=""
 cleanup() { if [[ -n "$TMPD" ]]; then G worktree remove --force "$TMPD/wt" >/dev/null 2>&1 || true; rm -rf "$TMPD"; G worktree prune >/dev/null 2>&1 || true; TMPD=""; fi; }
 trap cleanup EXIT
 
-has_origin() { G remote | grep -qx origin; }
+has_origin() { [[ "$(cfg pi.github)" != false ]] && G remote | grep -qx origin; }
 ref_exists() { G rev-parse -q --verify "$1^{commit}" >/dev/null 2>&1; }
 resolve() { # branch -> commit sha (local branch, else origin/<branch>)
 	if ref_exists "refs/heads/$1"; then G rev-parse "refs/heads/$1"
@@ -183,8 +183,11 @@ waiting_reason() { # branch sha base_sha -> prints why it isn't finished; return
 	local b="$1" sha="$2" base_sha="$3" id d t active=0 why=""
 	while read -r id; do
 		[[ -n "$id" ]] || continue
-		G cat-file -e "$sha:openspec/changes/$id/tasks.md" 2>/dev/null || continue   # archived/removed
+		G cat-file -e "$sha:openspec/changes/$id" 2>/dev/null || continue   # archived/removed
 		active=1
+		if ! G cat-file -e "$sha:openspec/changes/$id/tasks.md" 2>/dev/null; then
+			why+="${why:+, }$id: missing tasks.md"; continue
+		fi
 		read -r d t < <(task_counts "$sha" "openspec/changes/$id/tasks.md")
 		if (( t == 0 )); then why+="${why:+, }$id: no tasks yet"
 		elif (( d < t )); then why+="${why:+, }$id: $d/$t tasks"; fi
@@ -257,7 +260,7 @@ build() {
 	done < <(G for-each-ref --sort=committerdate --format='%(refname:short) %(objectname)' refs/heads)
 	if (( ${#waiting[@]} )); then printf 'waiting (not finished, not in test): %s\n' "${waiting[@]}" > "$WAITING"; else rm -f "$WAITING"; fi
 
-	if (( ${#todo[@]} == 0 )); then
+	if (( ${#todo[@]} == 0 && ! REBUILD )); then
 		if [[ -z "$old" ]]; then
 			G update-ref -m "pi-test-branch" "refs/heads/$TESTBR" "$start"; G config --local pi.testbranch.managed true
 			old="$start"
@@ -394,7 +397,7 @@ do_sync() { # $1 = "wait" to wait for a running sync instead of leaving it a rer
 	elif ! flock -w 900 9; then touch "$RERUN"; exit 0; fi
 	while :; do
 		rm -f "$RERUN"
-		if (( FETCH )) && has_origin; then G fetch --quiet origin 2>/dev/null || true; fi
+		if (( FETCH )) && has_origin; then G fetch --quiet --prune origin 2>/dev/null || true; fi
 		push_branches
 		build
 		auto_live

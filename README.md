@@ -49,6 +49,16 @@ This repo is a normal project: `/propose`, `/apply`, `/ship`, merge. `pikit` dep
 **main** into `~/.local/share/pi-config` → `~/.pi/agent` (pi checks at startup; or run `pikit apply`).
 Try a branch first: `pikit use feat/x` · back: `pikit use main` · state: `pikit status`.
 Prompts are capped by `budgets.conf` — CI fails if one grows past it.
+An unsuccessful installation is retried by `pikit apply --if-changed`; only a successful installation
+is skipped. Checkout and installation share a deployment lock.
+
+`pinew --no-github` keeps setup local, including later automatic test-branch syncs. Running `pinew`
+again without that option re-enables GitHub sync. Existing-project setup leaves unrelated untracked
+files out of its commits. `/test-branch rebuild` discards stale test history even when there are no
+eligible feature branches left.
+
+Run `scripts/check.sh` to verify changes. OpenSpec 2.1.1 and esbuild 0.28.2 (or npx to fetch it) are
+required; missing behavior-test dependencies fail the checks. ShellCheck runs when installed.
 
 Models per role: `agent-models.conf`. Logins: `/login` in pi. Web keys: `~/.config/pi-kit/secrets.env`.
 
