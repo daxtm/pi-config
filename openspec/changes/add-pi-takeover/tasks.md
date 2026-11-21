@@ -2,7 +2,7 @@
 
 ## 1. Script skeleton and refusal paths
 
-- [ ] 1.1 Create `bin/pi-takeover [repo-dir]` (bash, `set -euo pipefail`, same conventions as
+- [x] 1.1 Create `bin/pi-takeover [repo-dir]` (bash, `set -euo pipefail`, same conventions as
       `bin/pi-gh-setup`): resolve repo dir, validate git repo + resolvable HEAD commit, `gh` auth,
       and a GitHub repo for `origin`; exit nonzero with a diagnostic on any invalid prerequisite.
       Check `git ls-remote origin refs/heads/main refs/heads/test` live; refuse (nonzero, name the
