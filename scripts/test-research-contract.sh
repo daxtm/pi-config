@@ -51,13 +51,29 @@ check_researcher() { # global/agents/researcher.md
 	return "$rc"
 }
 
+check_main() { # global/MAIN.md
+	local label="$1" c="$2" rc=0
+	has "$label" "$c" '`/research <question>` skips sizing' || rc=1
+	has "$label" "$c" 'answer-only' || rc=1
+	has "$label" "$c" 'delegate the question alone' || rc=1
+	has "$label" "$c" 'return a few' || rc=1
+	has "$label" "$c" 'No sizing line, branching, planning, edits, or task updates' || rc=1
+	has "$label" "$c" 'the active task keeps its goal' || rc=1
+	has "$label" "$c" 'never apply findings unless the user separately asks' || rc=1
+	has "$label" "$c" 'web by default; local look-ups only when explicitly scoped' || rc=1
+	return "$rc"
+}
+
+
 main() {
 	local research researcher
 	research="$(<"$ROOT/global/prompts/research.md")"
 	researcher="$(<"$ROOT/global/agents/researcher.md")"
+	mainc="$(<"$ROOT/global/MAIN.md")"
 
 	check_research "global/prompts/research.md" "$research" || fail=1
 	check_researcher "global/agents/researcher.md" "$researcher" || fail=1
+	check_main "global/MAIN.md" "$mainc" || fail=1
 
 	# Negative fixtures: in-memory copies with a required clause removed must fail the checks.
 	# (research.md minus the standalone/no-local-tools/non-steering clauses)
@@ -76,8 +92,16 @@ main() {
 		fail=1
 	fi
 
+
+	# (MAIN.md minus the answer-only sizing exception)
+	broken="$(grep -v -e 'skips sizing' -e 'answer-only' -e 'keeps its goal' <<<"$mainc")"
+	if check_main "negative:MAIN.md" "$broken" >/dev/null 2>&1; then
+		echo "FAIL negative fixture: MAIN.md checks pass without the sizing exception"
+		fail=1
+	fi
+
 	if (( fail == 0 )); then
-		echo "ok   research contract checks (research, researcher + negatives)"
+		echo "ok   research contract checks (research, researcher, MAIN + negatives)"
 	fi
 	return "$fail"
 }
