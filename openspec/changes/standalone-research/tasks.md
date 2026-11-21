@@ -8,7 +8,7 @@ Each checkbox is one small implementation commit. Keep `budgets.conf` unchanged.
 
 ## 2. Main-session non-steering boundary
 
-- [ ] 2.1 Update `global/MAIN.md` so `/research` bypasses sizing/change workflows and returns an answer without applying findings or changing active-task goals; update researcher routing to web by default and explicit project lookups only. Extend the contract helper with MAIN assertions and a negative fixture removing the sizing exception; run the helper and `scripts/check.sh`, confirming MAIN remains within 30 lines / 420 words.
+- [x] 2.1 Update `global/MAIN.md` so `/research` bypasses sizing/change workflows and returns an answer without applying findings or changing active-task goals; update researcher routing to web by default and explicit project lookups only. Extend the contract helper with MAIN assertions and a negative fixture removing the sizing exception; run the helper and `scripts/check.sh`, confirming MAIN remains within 30 lines / 420 words.
 
 ## 3. Preserve project planning research
 
