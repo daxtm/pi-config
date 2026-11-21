@@ -10,7 +10,7 @@ fixes; **scripts and GitHub Actions run the process** (see [ADR-0002](docs/adr/0
 |---|---|---|---|
 | `/propose <idea>` | branch `feat/<id>`, OpenSpec change (+ ADR if a real decision), pushed | spec | 1 |
 | *read it, say go* | | | |
-| `/apply` | tasks implemented, `scripts/check.sh` passing, pushed; lands in `test` / the live copy | build (+1 debugger round if red) | 1–2 |
+| `/apply` | a test of what you asked for written first, then the tasks until it passes; now finished, so it joins `test` / the live copy | build (+1 debugger round if red) | 1–2 |
 | *try it; ask for tweaks* | same branch | build / debugger | per tweak |
 | `/ship` | main merged in, tasks checked, change archived, pushed, PR opened | script | 0 |
 | *CI green → you merge on GitHub* | you choose "Delete branch" or keep it | you | 0 |
@@ -20,15 +20,19 @@ Also: `/fix <symptom>` (or `/fix ci` when the PR's CI is red), `/roadmap <big id
 `/propose next`, `/research <question>` (standalone answer by default; project look-ups only when
 the question names this project, a repo, or a path — see
 [ADR-0005](docs/adr/0005-explicit-research-scope.md)), `/adr <decision>`, `/commit`. Tiny edits: just ask — the
-main session does them on a `chore/` branch, then `/ship`.
+main session does them on a `chore/` branch, then `/ship` (in pi-config itself every change goes
+through `/propose`, so it's designed and tested, never patched in mid-task).
 
 Scripts (no model): `/ship`, `/cleanup [--dry-run]`, `/switch [branch]`, `/test-branch [rebuild]`, `/live …`, `/pinew <name>`,
 `/zsh on|off`, `/web on|off`.
 
 ## Branches
 - `feat/` `fix/` `chore/` `docs/` — where all work happens; pi commits and pushes them.
-- `test` — automatically main + every unmerged branch, pushed to GitHub. A live copy (e.g. a ComfyUI
-  node) follows it. Conflicts are resolved by the model, never by you.
+- `test` — `main` plus every **finished** branch, pushed to GitHub: a `feat/` branch joins once every
+  task in its OpenSpec change is ticked (`/apply` done); `fix/` `chore/` `docs/` branches join with their
+  first commit. Unfinished work stays out (`/test-branch` lists what's waiting). A live copy (e.g. a
+  ComfyUI node) follows it. Conflicts are resolved by the model, never by you. Nothing ships from `test`.
+  Feature branches are pushed to GitHub automatically after every commit.
 - `main` — changes only when you merge a PR. Merge with **Create a merge commit**.
 
 ## New projects: `pinew <name>`

@@ -19,6 +19,9 @@
 #
 # Where the setup files land: a brand-new or never-pushed repo → committed on main. A repo already on
 # GitHub → committed on a chore/pi-setup-<date> branch, pushed, and shipped as a PR for you to merge.
+# Taking over a GitHub repo that has no `main` yet: `main` is created from the repo's current default
+# branch (or your local main / current commit) — creation only, an existing branch is never moved —
+# and pi-gh-setup makes it the default branch. Then the normal setup above continues.
 set -euo pipefail
 
 KIT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -59,6 +62,21 @@ SETUP_BRANCH=""; RETURN_TO=""
 if (( HAS_HEAD && HAS_ORIGIN )); then
 	[ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "ERROR: commit or stash your changes first (git status)" >&2; exit 1; }
 	git fetch -q origin
+	if ! git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
+		# Takeover: GitHub has no main. Create it from local main, else GitHub's default branch, else HEAD.
+		src=""; from=""
+		if git rev-parse -q --verify refs/heads/main >/dev/null; then src="$(git rev-parse refs/heads/main)"; from="your local main"
+		else
+			def="$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\)[[:space:]]*HEAD$|\1|p')"
+			if [ -n "$def" ] && git rev-parse -q --verify "refs/remotes/origin/$def" >/dev/null; then
+				src="$(git rev-parse "refs/remotes/origin/$def")"; from="GitHub's default branch $def"
+			else src="$(git rev-parse HEAD)"; from="the current commit"; fi
+		fi
+		git push -q --force-with-lease=refs/heads/main: origin "$src:refs/heads/main" \
+			|| { echo "ERROR: couldn't create main on GitHub (nothing else was changed)" >&2; exit 1; }
+		git fetch -q origin
+		echo "github     the repo had no main — created it from $from (${src:0:7})"
+	fi
 	RETURN_TO="$(git branch --show-current)"
 	SETUP_BRANCH="chore/pi-setup-$(date +%Y%m%d-%H%M%S)"
 	base="main"; git rev-parse -q --verify refs/remotes/origin/main >/dev/null && base="origin/main"

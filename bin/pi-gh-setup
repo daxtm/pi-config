@@ -28,6 +28,16 @@ gh api -X PATCH "repos/$repo" --silent \
 	-F has_wiki=false -F has_projects=false
 echo "github     $repo: merge commits only; branches kept until you delete them on the merged PR"
 
+# main is the default branch whenever it exists (taken-over repos often default to something else)
+current_default="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null || true)"
+if [[ "$current_default" != "main" ]] && git ls-remote --exit-code -q origin refs/heads/main >/dev/null 2>&1; then
+	if gh api -X PATCH "repos/$repo" --silent -f default_branch=main; then
+		echo "github     default branch: ${current_default:-none} → main"
+	else
+		echo "github     couldn't make main the default branch — set it in the repo's Settings → General" >&2
+	fi
+fi
+
 if [[ "$visibility" == "PUBLIC" ]]; then
 	# free on public repos: GitHub rejects a push that contains a recognised secret (API key, token…)
 	if gh api -X PATCH "repos/$repo" --silent --input - <<<'{"security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}}' 2>/dev/null; then

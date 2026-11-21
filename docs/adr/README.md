@@ -13,3 +13,4 @@ except to mark it superseded by a newer ADR.
 | [0004](0004-script-owned-repository-takeover.md) | Script-owned repository takeover | Superseded by 0006 | 2026-11-21 |
 | [0005](0005-explicit-research-scope.md) | Explicit research scope | Accepted | 2026-11-21 |
 | [0006](0006-takeover-is-part-of-pinew.md) | Taking over a repo is part of `pinew` | Accepted | 2026-11-21 |
+| [0007](0007-test-holds-only-finished-work.md) | `test` holds only finished work | Accepted | 2026-11-21 |
