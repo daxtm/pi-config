@@ -1,0 +1,5 @@
+- [x] 1.1 Add and run regression cases against the supplied fixes; observe failures.
+- [x] 1.2 Correct test-branch rebuild, pruning and missing-task detection.
+- [x] 1.3 Correct existing-project setup isolation and staging.
+- [x] 1.4 Correct deployment success tracking and retry.
+- [x] 1.5 Run scripts/check.sh and OpenSpec validation, update documentation and archive.

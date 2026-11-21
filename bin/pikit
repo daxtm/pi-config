@@ -46,6 +46,9 @@ target_of() { # branch -> sha to deploy (GitHub's copy if it's newer), empty if 
 
 deploy() {
 	local b want have
+	mkdir -p "$LOGDIR"
+	exec 8>"$LOGDIR/deploy.lock"
+	flock 8   # serialize target selection, checkout, install and success recording
 	D fetch -q --prune origin 2>/dev/null || say "pikit: couldn't reach GitHub — using what's local"
 	b="$(followed)"
 	want="$(target_of "$b")"
@@ -60,14 +63,17 @@ deploy() {
 	fi
 	[[ -n "$want" ]] || die "nothing to deploy (no main branch)"
 	have="$(git -C "$DEPLOY" rev-parse HEAD 2>/dev/null || true)"
-	if (( IF_CHANGED )) && [[ "$want" == "$have" ]]; then return 0; fi
+	if (( IF_CHANGED )) && [[ "$want" == "$have" && -f "$LOGDIR/installed.sha" ]] \
+		&& [[ "$(cat "$LOGDIR/installed.sha")" == "$want" ]]; then return 0; fi
 	if [[ -n "$(git -C "$DEPLOY" status --porcelain --untracked-files=no)" ]]; then
 		die "files were edited in $DEPLOY — never edit the deployed copy. Reset it: git -C $DEPLOY checkout -- . && pikit apply"
 	fi
 	git -C "$DEPLOY" -c core.hooksPath=/dev/null checkout -q --detach "$want"
 	mkdir -p "$LOGDIR"
 	echo "=== $(date '+%F %T') deploying $b @ ${want:0:7}" >> "$LOG"
-	if PIKIT_DEPLOYING=1 flock "$LOGDIR/deploy.lock" "$DEPLOY/install.sh" >> "$LOG" 2>&1; then
+	rm -f "$LOGDIR/installed.sha"   # a failed attempt cannot retain a success marker
+	if PIKIT_DEPLOYING=1 "$DEPLOY/install.sh" >> "$LOG" 2>&1; then
+		printf '%s\n' "$want" > "$LOGDIR/installed.sha"
 		echo "pi-config: deployed $b @ $(git -C "$DEPLOY" log -1 --format='%h %s') — /reload (or a new pi session) to use it"
 	else
 		die "install.sh failed for $b @ ${want:0:7} (log: $LOG). Go back: pikit use main"
@@ -79,8 +85,36 @@ for a in "$@"; do case "$a" in --quiet) QUIET=1 ;; --if-changed) IF_CHANGED=1 ;;
 
 case "$cmd" in
 -h|--help|help) sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+repair)
+	issue="${1:?describe the failure}"; shift
+	retry=("$@"); original="$PWD"
+	
+	D fetch -q origin main
+	base="$(D rev-parse FETCH_HEAD)"
+	id="$(printf '%s\n' "$base" "$PWD" "$issue" | sha256sum | cut -c1-16)"
+	branch="fix/kit-$id"
+	wt="$LOGDIR/repairs/$id"
+	mkdir -p "$LOGDIR/repairs"
+	exec 7>"$wt.lock"; flock 7
+	if [[ ! -e "$wt" ]]; then
+		D worktree add -q -b "$branch" "$wt" "$base"
+		model="$(sed -n 's/^build[[:space:]]*=[[:space:]]*//p' "$wt/agent-models.conf" | cut -d' ' -f1)"
+		[[ -n "$model" ]] || die 'missing build model'
+		(cd "$wt" && PI_TEST_BRANCH=1 timeout 1800 pi -p --no-session --model "$model" --tools read,grep,find,ls,bash,edit,write "Repair this kit defect: $issue. Reproduce it with an isolated regression, implement the fix, commit only relevant changes here. Do not deploy or push.") || die "builder stopped; inspect $wt"
+	fi
+	cd "$wt"
+	[[ "$(git branch --show-current)" == "$branch" && -z "$(git status --porcelain)" && "$(git rev-parse HEAD)" != "$base" ]] || die "incomplete repair at $wt"
+	"$DEPLOY/bin/pi-check" HEAD
+	git push -qu origin "$branch"
+	url="$(gh pr list --base main --head "$branch" --state open --json url -q '.[0].url')"
+	if [[ -n "$url" ]]; then echo "$url"; else gh pr create --base main --head "$branch" --title "Repair kit workflow ($id)" --body 'The isolated repair passed local checks. Review and merge to deploy.'; fi
+	if (( ${#retry[@]} )); then
+		repair_sha="$(git rev-parse HEAD)"
+		(cd "$original" && python3 "$DEPLOY/lib/retry.py" save "$repair_sha" "${retry[@]}")
+	fi
+	;;
 path) echo "$DEV" ;;
-apply) deploy ;;
+apply) deploy; if [[ "$(followed)" == main && -f "$DEPLOY/lib/retry.py" ]]; then python3 "$DEPLOY/lib/retry.py" resume; fi ;;
 use)
 	b="${1:?usage: pikit use <branch>}"
 	[[ -n "$(target_of "$b")" ]] || { D fetch -q origin 2>/dev/null || true; [[ -n "$(target_of "$b")" ]] || die "no branch named $b"; }
@@ -94,6 +128,8 @@ status)
 	echo "deployed:  $DEPLOY → follows $b @ $(git -C "$DEPLOY" log -1 --format='%h %s')"
 	if [[ -z "$want" ]]; then echo "           $b no longer exists — pikit apply goes back to main"
 	elif [[ "$want" != "$have" ]]; then echo "           update waiting: ${want:0:7} — run: pikit apply"
+	elif [[ ! -f "$LOGDIR/installed.sha" || "$(<"$LOGDIR/installed.sha")" != "$have" ]]; then
+		echo "           installation pending — run: pikit apply"
 	else echo "           up to date"; fi
 	if [[ -f "$AGENT_DIR/.kit-manifest" ]]; then
 		mapfile -t extra < <(for d in agents prompts skills extensions; do

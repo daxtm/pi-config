@@ -1,6 +1,6 @@
 # ADR-0004: Script-owned repository takeover
 
-- Status: Accepted
+- Status: Superseded by [ADR-0006](0006-takeover-is-part-of-pinew.md)
 - Date: 2026-11-21
 - Related: add-pi-takeover (planned); docs/ROADMAP.md; follows ADR-0002
 

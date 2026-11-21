@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # pi-test-branch — keeps the `test` branch and the live copy up to date.
 #
-#   `test` is a normal branch, pushed to GitHub. Whenever a feature branch gets new commits it is
-#   merged into `test` (normal merge commits, normal push — never forced). Changes on GitHub's `test`
+#   `test` is a normal branch, pushed to GitHub, holding main + every FINISHED branch: a feat/ branch
+#   joins once every task in its OpenSpec change is ticked (/apply is done); fix/ chore/ docs/
+#   branches without a change join with their first commit (they're one-step work). Unfinished
+#   branches wait — `status` lists them. Finished branches are merged in whenever they get new commits
+#   (normal merge commits, normal push — never forced). Changes on GitHub's `test`
 #   and on `main` are merged in too, so main is never ahead of test. Conflicts are resolved for you:
 #   first by git rerere (a resolution seen before), otherwise by the model (bin/pi-resolve). Merging
 #   happens in a throwaway worktree, so your working folder is never touched.
 #   `pi-test-branch rebuild` (you run it, never automatic): start `test` over from main + the branches
 #   that exist now (drops abandoned work), force-pushed with lease.
+#
+# Push: every sync pushes local feature branches that are ahead of their GitHub copy, so GitHub's
+# feature branch always matches yours (pushing isn't left to the model).
 #
 # Cleanup (`pi-test-branch cleanup`, or /cleanup in pi — only when you run it, never automatic):
 # deletes each local branch if and only if it no longer exists on GitHub (you deleted it there).
@@ -23,7 +29,7 @@
 # Usage:
 #   pi-test-branch [sync] [--fetch] [--quiet] [--repo DIR]   rebuild if needed + update live copy
 #   pi-test-branch status                                              show test branch + live copy state
-#   pi-test-branch rebuild                                             start test over (see above)
+#   pi-test-branch rebuild [--dry-run]                                 preview or rebuild test
 #   pi-test-branch cleanup [--dry-run]        delete local branches that are gone from GitHub (see above)
 #   pi-test-branch live-set <path> [branch]   make <path> a live copy following [branch] (default test)
 #   pi-test-branch live-branch <branch>       make the live copy follow another branch
@@ -54,6 +60,12 @@ while (( $# )); do
 	shift
 done
 
+if (( DRY_RUN )) && [[ "$CMD" != cleanup && "$CMD" != rebuild ]]; then
+	echo "--dry-run is supported for cleanup and rebuild" >&2; exit 2
+fi
+if [[ "$CMD" == sync || "$CMD" == rebuild || "$CMD" == status || "$CMD" == cleanup ]]; then
+	(( ${#ARGS[@]} == 0 )) || { echo "unexpected argument: ${ARGS[0]}" >&2; exit 2; }
+fi
 say()  { (( QUIET )) || printf '%s\n' "$*"; }
 ROOT="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" || { echo "pi-test-branch: not a git repo: $REPO" >&2; exit 1; }
 COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
@@ -64,33 +76,27 @@ cfg() { G config --local --get "$1" 2>/dev/null || true; }
 STATUS="$COMMON/pi-test-branch.status"
 RERUN="$COMMON/pi-test-branch.rerun"
 LIVESTATUS="$COMMON/pi-test-branch.live"
-FAILED="$COMMON/pi-test-branch.unresolved"   # "branch sha" the model couldn't resolve (retried after new commits)
+FAILED="$COMMON/pi-test-branch.unresolved"
+WAITING="$COMMON/pi-test-branch.waiting"   # unfinished branches, kept out of test   # "branch sha" the model couldn't resolve (retried after new commits)
 KIT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 TMPD=""
 cleanup() { if [[ -n "$TMPD" ]]; then G worktree remove --force "$TMPD/wt" >/dev/null 2>&1 || true; rm -rf "$TMPD"; G worktree prune >/dev/null 2>&1 || true; TMPD=""; fi; }
 trap cleanup EXIT
 
-has_origin() { G remote | grep -qx origin; }
+has_origin() { [[ "$(cfg pi.github)" != false ]] && G remote | grep -qx origin; }
 ref_exists() { G rev-parse -q --verify "$1^{commit}" >/dev/null 2>&1; }
 resolve() { # branch -> commit sha (local branch, else origin/<branch>)
 	if ref_exists "refs/heads/$1"; then G rev-parse "refs/heads/$1"
-	elif ref_exists "refs/remotes/origin/$1"; then G rev-parse "refs/remotes/origin/$1"
+	elif has_origin && ref_exists "refs/remotes/origin/$1"; then G rev-parse "refs/remotes/origin/$1"
 	else return 1; fi
 }
 tracked_dirty() { [[ -n "$(GW "$1" status --porcelain --untracked-files=no 2>/dev/null)" ]]; }
 
-base_ref() { # newest of main/origin/main (or master)
+base_ref() {
 	local name
 	for name in main master; do
-		local l="" r=""
-		ref_exists "refs/heads/$name" && l="refs/heads/$name"
-		ref_exists "refs/remotes/origin/$name" && r="refs/remotes/origin/$name"
-		if [[ -n "$l" && -n "$r" ]]; then
-			if G merge-base --is-ancestor "$r" "$l"; then echo "$l"; else echo "$r"; fi
-			return 0
-		fi
-		[[ -n "$l" ]] && { echo "$l"; return 0; }
-		[[ -n "$r" ]] && { echo "$r"; return 0; }
+		if has_origin && ref_exists "refs/remotes/origin/$name"; then echo "refs/remotes/origin/$name"; return 0; fi
+		if ref_exists "refs/heads/$name"; then echo "refs/heads/$name"; return 0; fi
 	done
 	return 1
 }
@@ -112,7 +118,7 @@ sync_live() {
 		echo "live copy NOT updated: files edited in $live (check: git -C $live status)" > "$LIVESTATUS"
 		return 0
 	fi
-	GW "$live" checkout --quiet --detach "$want"
+	GW "$live" checkout --quiet --no-overwrite-ignore --detach "$want"
 	say "live copy → $branch @ $(GW "$live" log -1 --format='%h %s')"
 	echo "live copy → $branch @ ${want:0:7} ($(date '+%H:%M'))" > "$LIVESTATUS"
 	restart="$(cfg pi.live.restart)"
@@ -137,7 +143,11 @@ follow_worktrees() { # folders that have `test` checked out follow it (only if t
 		"worktree "*) wt="${line#worktree }" ;;
 		"branch refs/heads/$TESTBR")
 			if tracked_dirty "$wt"; then echo "$wt is on $TESTBR with edits — not updated" >> "$STATUS"
-			else GW "$wt" reset --hard --quiet "$new"; fi ;;
+				return 1
+			elif ! GW "$wt" read-tree -u -m HEAD "$new"; then
+				echo "test branch NOT updated: could not update files in $wt" | tee "$STATUS" >&2
+				return 1
+			fi ;;
 		esac
 	done < <(G worktree list --porcelain)
 }
@@ -161,6 +171,9 @@ cleanup_gone() { # local branches whose GitHub copy is gone → delete (if and o
 		[[ "$b" =~ ^(main|master|$TESTBR)$ ]] && continue
 		[[ "$up" == "[gone]" ]] || continue          # never pushed, or still on GitHub → keep
 		if grep -qxF "$b" <<<"$current"; then echo "kept $b (checked out — switch away and run cleanup again)"; continue; fi
+		if ! G merge-base --is-ancestor "refs/heads/$b" refs/remotes/origin/main; then
+			echo "kept $b (local tip is outside origin/main)"; continue
+		fi
 		n=$((n + 1))
 		if (( DRY_RUN )); then echo "would delete $b (gone from GitHub)"
 		else G branch -q -D "$b" && echo "deleted $b (gone from GitHub)"; fi
@@ -168,22 +181,80 @@ cleanup_gone() { # local branches whose GitHub copy is gone → delete (if and o
 	(( n )) || echo "nothing to clean up"
 }
 
+task_counts() { # sha path-to-tasks.md -> "done total"
+	G show "$1:$2" 2>/dev/null | awk '/^[[:space:]]*-[[:space:]]+\[[^]]*\]/ { t++; if ($0 ~ /^[[:space:]]*-[[:space:]]+\[[xX]\]/) d++ } END { print d+0, t+0 }'
+}
+
+waiting_reason() { # branch sha base_sha -> prints why it isn't finished; returns 0 if it IS finished
+	local b="$1" sha="$2" base_sha="$3" id d t active=0 why=""
+	while read -r id; do
+		[[ -n "$id" ]] || continue
+		G cat-file -e "$sha:openspec/changes/$id" 2>/dev/null || continue   # archived/removed
+		active=1
+		if ! G cat-file -e "$sha:openspec/changes/$id/tasks.md" 2>/dev/null; then
+			why+="${why:+, }$id: missing tasks.md"; continue
+		fi
+		read -r d t < <(task_counts "$sha" "openspec/changes/$id/tasks.md")
+		if (( t == 0 )); then why+="${why:+, }$id: no tasks yet"
+		elif (( d < t )); then why+="${why:+, }$id: $d/$t tasks"; fi
+	done < <(G diff --name-only "$base_sha...$sha" -- openspec/changes | awk -F/ '$3 != "archive" && NF >= 4 { print $3 }' | sort -u)
+	if [[ -n "$why" ]]; then echo "$why"; return 1; fi
+	(( active )) && return 0
+	G diff --name-only --diff-filter=A "$base_sha...$sha" -- openspec/changes/archive | grep -q . && return 0
+	if [[ "$b" == feat/* ]] && ! G log -1 --format='%(trailers:key=Pi-Ready,valueonly)' "$sha" | grep -ixq yes; then
+		echo "direct feature awaits Pi-Ready: yes on its final commit"; return 1
+	fi
+	return 0
+}
+
+push_branches() { # local feature branches ahead of GitHub → push (never main/test, never forced)
+	has_origin || return 0
+	local b up track r l
+	while IFS='|' read -r b up track; do
+		[[ "$b" =~ ^(feat|fix|chore|docs)/ ]] || continue
+		[[ "$track" == "[gone]" ]] && continue                    # you deleted it on GitHub — never recreate it
+		l="$(G rev-parse "refs/heads/$b")"
+		r="$(G rev-parse -q --verify "refs/remotes/origin/$b" 2>/dev/null || true)"
+		if [[ -z "$r" ]]; then
+			[[ -z "$up" ]] || continue                              # had an upstream, now gone: don't recreate
+			G push --quiet -u --force-with-lease="refs/heads/$b:" origin "refs/heads/$b:refs/heads/$b" || echo "could not publish $b" >&2
+		elif [[ "$r" != "$l" ]] && G merge-base --is-ancestor "$r" "$l"; then
+			G push --quiet -u --force-with-lease="refs/heads/$b:$r" origin "$l:refs/heads/$b" || echo "could not update $b (remote changed)" >&2
+		elif [[ -z "$up" ]]; then
+			G branch -q --set-upstream-to="origin/$b" "$b" 2>/dev/null || true   # record it, so a later delete is seen
+		fi
+	done < <(G for-each-ref --format='%(refname:short)|%(upstream)|%(upstream:track)' refs/heads)
+}
+
 # build: merge everything new into `test` (persistent branch, pushed to GitHub).
 #   REBUILD=1: start over from main instead (used by `rebuild`; force-pushed with lease).
 REBUILD=0
 build() {
 	local base base_sha start old="" b sha
+	# Check before moving the shared branch ref: otherwise a clean checkout appears dirty
+	# merely because its HEAD moved while its index still describes the old commit.
+	local wt="" line
+	while IFS= read -r line; do
+		case "$line" in
+		"worktree "*) wt="${line#worktree }" ;;
+		"branch refs/heads/$TESTBR")
+			if tracked_dirty "$wt"; then
+				echo "test branch NOT updated: $wt has edits — commit or stash them first" > "$STATUS"
+				say "$(cat "$STATUS")"; return 1
+			fi ;;
+		esac
+	done < <(G worktree list --porcelain)
 	base="$(base_ref)" || { say "no main branch yet — nothing to build"; return 0; }
 	base_sha="$(G rev-parse "$base")"
 
 	if ref_exists "refs/heads/$TESTBR" && [[ "$(cfg pi.testbranch.managed)" != "true" ]]; then
 		echo "test branch: a branch named '$TESTBR' already exists and isn't managed by the kit — left alone. Rename it (git branch -m $TESTBR my-old-test) to let the kit manage '$TESTBR'." > "$STATUS"
-		say "$(cat "$STATUS")"; return 0
+		say "$(cat "$STATUS")"; (( ! REBUILD )); return
 	fi
 
 	ref_exists "refs/heads/$TESTBR" && old="$(G rev-parse "refs/heads/$TESTBR")"
 	local remote_sha=""
-	ref_exists "refs/remotes/origin/$TESTBR" && remote_sha="$(G rev-parse "refs/remotes/origin/$TESTBR")"
+	has_origin && ref_exists "refs/remotes/origin/$TESTBR" && remote_sha="$(G rev-parse "refs/remotes/origin/$TESTBR")"
 
 	if (( REBUILD )); then start="$base_sha"
 	elif [[ -n "$old" ]]; then start="$old"
@@ -197,18 +268,41 @@ build() {
 	fi
 	# main must never be ahead of test; if it is (e.g. a squash-merged promotion PR), merge it back in
 	G merge-base --is-ancestor "$base_sha" "$start" || { todo+=("$base_sha"); labels+=("${base#refs/*/}"); }
-	while read -r b sha; do
-		[[ "$b" =~ ^(main|master|$TESTBR)$ ]] && continue
-		G merge-base --is-ancestor "$sha" "$start" && continue           # already in test
+	local -a waiting=()
+	local why tracking ref remote
+	local -a namespaces=(refs/heads)
+	has_origin && namespaces+=(refs/remotes/origin)
+	while IFS='|' read -r ref sha tracking; do
+		case "$ref" in
+		refs/heads/*) b="${ref#refs/heads/}" ;;
+		refs/remotes/origin/*)
+			b="${ref#refs/remotes/origin/}"
+			ref_exists "refs/heads/$b" && continue ;; # local iteration compares both tips
+		esac
+		[[ "$b" =~ ^(feat|fix|chore|docs)/ && "$tracking" != "[gone]" ]] || continue
+		if [[ "$ref" == refs/heads/* ]] && has_origin && ref_exists "refs/remotes/origin/$b"; then
+			remote="$(G rev-parse "refs/remotes/origin/$b")"
+			if G merge-base --is-ancestor "$sha" "$remote"; then sha="$remote"
+			elif ! G merge-base --is-ancestor "$remote" "$sha"; then
+				echo "test branch NOT updated: $b diverged from origin/$b" | tee "$STATUS" >&2; return 1
+			fi
+		fi
 		G merge-base --is-ancestor "$sha" "$base_sha" && continue        # already in main (merged PR)
+		if ! why="$(waiting_reason "$b" "$sha" "$base_sha")"; then         # unfinished → stays out of test
+			waiting+=("$b ($why)"); continue
+		fi
+		G merge-base --is-ancestor "$sha" "$start" && continue           # already in test
 		todo+=("$sha"); labels+=("$b")
-	done < <(G for-each-ref --sort=committerdate --format='%(refname:short) %(objectname)' refs/heads)
+	done < <(G for-each-ref --sort=committerdate --format='%(refname)|%(objectname)|%(upstream:track)' "${namespaces[@]}")
+	if (( ${#waiting[@]} )); then printf 'waiting (not finished, not in test): %s\n' "${waiting[@]}" > "$WAITING"; else rm -f "$WAITING"; fi
 
-	if (( ${#todo[@]} == 0 )); then
+	if (( ${#todo[@]} == 0 && ! REBUILD )); then
+		(cd "$ROOT" && "$KIT_DIR/bin/pi-check" --cached "$start") > "$STATUS" 2>&1 || { cat "$STATUS" >&2; return 1; }
 		if [[ -z "$old" ]]; then
 			G update-ref -m "pi-test-branch" "refs/heads/$TESTBR" "$start"; G config --local pi.testbranch.managed true
 			old="$start"
 		fi
+		[[ -f "$STATUS" ]] || echo "test branch: up to date ✓" > "$STATUS"
 		# pushed but GitHub copy behind (e.g. earlier push failed)?
 		if has_origin && [[ "$remote_sha" != "$old" ]] && { [[ -z "$remote_sha" ]] || G merge-base --is-ancestor "$remote_sha" "$old"; }; then push_test; fi
 		return 0
@@ -221,19 +315,23 @@ build() {
 	local tmp="$TMPD"
 	G worktree add --quiet --detach "$tmp/wt" "$start"
 	local -a merged=() conflicts=()
+	local -A merged_tips=()
 	for i in "${!todo[@]}"; do
 		b="${labels[$i]}"; sha="${todo[$i]}"
-		if GW "$tmp/wt" merge --quiet --no-ff --no-edit -m "Merge $b into $TESTBR" "$sha" >/dev/null 2>&1; then
-			merged+=("$b")
+		# Stable merge IDs let unchanged inputs reuse a failed or successful gate.
+		local stamp
+		stamp="$(GW "$tmp/wt" log -1 --format=%ct HEAD "$sha") +0000"
+		if GIT_AUTHOR_DATE="$stamp" GIT_COMMITTER_DATE="$stamp" GW "$tmp/wt" merge --quiet --no-ff --no-edit -m "Merge $b into $TESTBR" "$sha" >/dev/null 2>&1; then
+			merged+=("$b"); merged_tips["$b"]="$sha"
 		elif resolve_conflict "$tmp/wt" "$b" "$sha"; then
-			merged+=("$b (conflict resolved by the model)")
+			merged+=("$b (conflict resolved by the model)"); merged_tips["${merged[-1]}"]="$sha"
 		else
 			local files clash="" m
 			files="$(GW "$tmp/wt" diff --name-only --diff-filter=U | head -n 5 | paste -sd, -)"
 			GW "$tmp/wt" merge --abort >/dev/null 2>&1 || GW "$tmp/wt" reset --hard --quiet
 			for m in "${merged[@]}"; do
 				[[ "$m" == "${base#refs/*/}" || "$m" == "origin/$TESTBR" ]] && continue
-				if G diff --name-only "$base_sha...$(G rev-parse "refs/heads/$m")" | grep -qxF -f <(tr ',' '\n' <<<"$files"); then
+				if G diff --name-only "$base_sha...${merged_tips[$m]}" | grep -qxF -f <(tr ',' '\n' <<<"$files"); then
 					clash+="${clash:+, }$m"
 				fi
 			done
@@ -241,8 +339,10 @@ build() {
 		fi
 	done
 	local new; new="$(GW "$tmp/wt" rev-parse HEAD)"
+	(cd "$ROOT" && "$KIT_DIR/bin/pi-check" --cached "$new") > "$STATUS" 2>&1 || { cat "$STATUS" >&2; return 1; }
 	cleanup
 
+	follow_worktrees "$new"
 	G update-ref -m "pi-test-branch" "refs/heads/$TESTBR" "$new"
 	G config --local pi.testbranch.managed true
 	{
@@ -254,11 +354,10 @@ build() {
 		[[ -f "$STATUS.tmp" ]] && cat "$STATUS.tmp"
 	} > "$STATUS"
 	rm -f "$STATUS.tmp"
-	follow_worktrees "$new"
 	if (( REBUILD )); then
 		if has_origin; then
 			G push --quiet --force-with-lease="refs/heads/$TESTBR:${remote_sha:-}" origin "refs/heads/$TESTBR:refs/heads/$TESTBR" 2>/dev/null \
-				|| echo "rebuild: push to GitHub was refused (someone pushed to $TESTBR meanwhile) — run rebuild again" >> "$STATUS"
+				|| { echo "rebuild: remote rejected $TESTBR; run rebuild again" | tee -a "$STATUS" >&2; return 1; }
 		fi
 	else
 		push_test
@@ -296,6 +395,7 @@ comfy_root() { # ComfyUI install folder (has main.py, comfy/, custom_nodes/); se
 
 make_live() { # path branch — create/register the live copy (no locking; caller syncs it)
 	local path="$1" branch="$2" sha
+	sha="$(resolve "$branch")" || return 2
 	if ! is_our_worktree "$path"; then
 		if [[ -e "$path" ]]; then
 			(( ADOPT )) || return 3
@@ -305,7 +405,6 @@ make_live() { # path branch — create/register the live copy (no locking; calle
 			say "moved the existing $path to $backup"
 			echo "previous $(basename "$path") folder moved to $backup" > "$LIVESTATUS.moved"
 		fi
-		sha="$(resolve "$branch")" || return 2
 		G worktree prune
 		mkdir -p "$(dirname "$path")"
 		G worktree add --quiet --detach "$path" "$sha"
@@ -340,8 +439,15 @@ do_sync() { # $1 = "wait" to wait for a running sync instead of leaving it a rer
 	elif ! flock -w 900 9; then touch "$RERUN"; exit 0; fi
 	while :; do
 		rm -f "$RERUN"
-		if (( FETCH )) && has_origin; then G fetch --quiet origin 2>/dev/null || true; fi
+		if (( FETCH )) && has_origin; then G fetch --quiet --prune origin || { echo "fetch failed — no sync performed" >&2; return 1; }; fi
+		if [[ "$(cfg pi.testbranch.managed)" == true && "$(cfg pi.testbranch.version)" != 3 ]]; then
+			if has_origin; then G fetch -q --prune origin; fi
+			if ref_exists refs/heads/test; then G update-ref refs/pi-kit/before-v3/test "$(G rev-parse refs/heads/test)"; fi
+			REBUILD=1
+		fi
+		push_branches
 		build
+		G config --local pi.testbranch.version 3
 		auto_live
 		sync_live
 		[[ -e "$RERUN" ]] || break
@@ -353,6 +459,12 @@ case "$CMD" in
 sync) do_sync ;;
 cleanup) cleanup_gone ;;
 rebuild)
+	if (( DRY_RUN )); then
+		echo "would rebuild test in $ROOT from main and eligible work branches"
+		has_origin && echo "would fetch origin and replace its test branch with a lease"
+		[[ -z "$(cfg pi.live.path)" ]] || echo "would sync the configured live copy"
+		exit 0
+	fi
 	FETCH=1; REBUILD=1; do_sync wait
 	REBUILD=0
 	echo "test rebuilt from main + current branches"
@@ -360,6 +472,7 @@ rebuild)
 	;;
 status)
 	if [[ -f "$STATUS" ]]; then cat "$STATUS"; else echo "test branch: not built yet"; fi
+	[[ -f "$WAITING" ]] && cat "$WAITING"
 	[[ -f "$LIVESTATUS" ]] && cat "$LIVESTATUS"
 	[[ -f "$LIVESTATUS.moved" ]] && cat "$LIVESTATUS.moved"
 	live="$(cfg pi.live.path)"

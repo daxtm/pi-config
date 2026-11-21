@@ -12,6 +12,10 @@ You are on the change's branch already. Edit only `openspec/`, `docs/adr/`, `doc
 Change `<id>` (follow `openspec/config.yaml` rules):
 1. Read the relevant code first — sections, not whole files. Check `docs/adr/README.md` and
    `openspec/specs/` so you don't contradict what exists.
+   **Fix before adding:** find the existing script, command or prompt that should already handle
+   this — if one exists, the change fixes it there. A new command, script, rule or capability needs
+   one sentence in the proposal on why no existing one can do it. Scale to the request: one change,
+   no roadmap, milestones or "hardening" follow-ups unless the user asked for them.
 2. `openspec/changes/<id>/proposal.md` — `## Why` (2+ full sentences), `## What Changes`,
    `## Impact`, plus out of scope and "how you'll see it work".
 3. `specs/<capability>/spec.md` deltas — `## ADDED|MODIFIED|REMOVED Requirements`,
@@ -21,8 +25,9 @@ Change `<id>` (follow `openspec/config.yaml` rules):
    `schema: spec-driven` and `skip_specs: true`.
 4. `design.md` only if there are real decisions. A decision that outlives this change → ADR
    (skill `adr`).
-5. `tasks.md` — `- [ ] 1.1 …` checkboxes, ≤8 small tasks, tests next to code, last task: make
-   `scripts/check.sh` cover the new behavior and pass.
+5. `tasks.md` — `- [ ] 1.1 …` checkboxes, ≤8 small tasks. Task 1.1: a test of what the user asked
+   for, checking what they'd observe (command output, files, branches), failing until the change
+   works. Last task: `scripts/check.sh` runs it and passes.
 6. `openspec validate <id> --strict` until it passes.
 7. Commit `docs(openspec): propose <id>` (+ ADRs) and push.
 

@@ -14,7 +14,7 @@ Run / demo: `./install.sh --dry-run` (preview a deploy), `bin/pikit status`.
 ## Layout
 - `bin/` — pikit, pi-ship, pi-branch, pi-gh-setup, pi-test-branch, pi-resolve, pi-kit-secret
 - `global/` → ~/.pi/agent (AGENTS.md every agent, MAIN.md main session only, agents/, prompts/, skills/, extensions/)
-- `templates/project/` — what pinew puts in each project (incl. CI)
+- `templates/project/` — what pinew puts in each project
 
 ## Rules (read ADR-0002 before changing the workflow)
 - Workflow logic goes in scripts, never in prompts. A prompt says what job to do, not how to police it.

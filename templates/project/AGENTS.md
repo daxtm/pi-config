@@ -1,6 +1,6 @@
 # {{PROJECT_NAME}}
 
-<!-- Project facts for pi. Sent with every request: keep it short (CI caps the kit's own prompts;
+<!-- Project facts for pi. Sent with every request: keep it short (the local check caps the kit's own prompts;
      keep this one under ~30 lines too). Ask pi: "fill in the placeholders in AGENTS.md". -->
 
 ## What this is
@@ -10,7 +10,7 @@
 <language/runtime + version, framework, package manager, database>
 
 ## Checks
-`scripts/check.sh` runs everything (install deps, tests, lint, build). CI runs the same script.
+`scripts/check.sh` runs everything (install deps, tests, lint, build). Use pi-check for committed changes.
 Run / demo: `<command that shows it working>`
 
 ## Layout

@@ -3,9 +3,16 @@
 #   1. every shell script parses (and passes shellcheck, when it's installed — CI has it)
 #   2. every TypeScript extension parses (esbuild)
 #   3. prompts/agents/skills stay inside budgets.conf
+#   4. the workflow scripts do what they promise (scripts/test-workflow.sh, credential-free)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 cd "$ROOT"
+# The installed kit may keep OpenSpec outside the invoking shell's PATH.
+# shellcheck disable=SC1091
+if [[ -f "$ROOT/.kit-paths" ]]; then
+	. "$ROOT/.kit-paths"
+	[[ -z "${KIT_NPM_BIN:-}" ]] || export PATH="$KIT_NPM_BIN:$PATH"
+fi
 fail=0
 bad() { echo "FAIL $*"; fail=1; }
 
@@ -19,22 +26,18 @@ else
 fi
 (( fail == before )) && echo "ok   ${#scripts[@]} shell scripts"
 
-# bin/pi-takeover behavior: temp-dir fixtures with a stub gh — no network, no real credentials
-if command -v git >/dev/null; then
-	bash scripts/test-pi-takeover.sh || bad "pi-takeover behavior"
-else
-	echo "skip pi-takeover tests (no git)"
-fi
 
-if command -v npx >/dev/null; then
+ESBUILD=(npx -y esbuild@0.28.2)
+command -v esbuild >/dev/null && ESBUILD=(esbuild)
+if command -v esbuild >/dev/null || command -v npx >/dev/null; then
 	n=0; before=$fail
 	for f in global/extensions/*.ts; do
-		npx -y esbuild@0.28.2 "$f" --log-level=error >/dev/null || bad "TypeScript syntax: $f"
+		"${ESBUILD[@]}" "$f" --log-level=error >/dev/null || bad "TypeScript syntax: $f"
 		n=$((n + 1))
 	done
 	(( fail == before )) && echo "ok   $n extensions parse"
 else
-	echo "skip extension syntax (no npx)"
+	bad "extension syntax requires esbuild or npx"
 fi
 
 shopt -s nullglob
@@ -50,6 +53,8 @@ done < budgets.conf
 
 before=$fail
 bash "$ROOT/scripts/test-research-contract.sh" || bad "research contract checks (see FAIL lines above)"
+# behavior: pinew / takeover / test rules / ship / cleanup / pikit / guards, in a throwaway HOME
+bash "$ROOT/scripts/test-workflow.sh" || bad "workflow behavior (see FAIL lines above)"
 (( fail == before )) && echo "ok   research contract checks"
 
 if [[ -n "${GITHUB_BASE_REF:-}" ]] && git diff --name-only "origin/$GITHUB_BASE_REF...HEAD" 2>/dev/null | grep -qx budgets.conf; then

@@ -5,6 +5,8 @@
  *   - push to main/master/test, or commit/merge while on one of them
  *   - edit the deployed pi setup (~/.pi/agent, ~/.local/share/pi-config) — change the pi-config
  *     project instead, so every config change goes branch → PR → your merge
+ *   - edit the pi-config project from the main session: changes there go through /propose
+ *     (spec + build subagents, with a test), never patched in mid-task
  * The kit's own scripts (/ship, pikit, pi-test-branch) run outside the AI's tools and aren't affected,
  * and neither are commands you type yourself with `!`. Installed by pi-config.
  */
@@ -33,6 +35,8 @@ const RULES: { re: RegExp; reason: string }[] = [
 const GIT_WRITE = [sub("push"), sub("commit"), sub("merge")];
 const home = os.homedir();
 const DEPLOYED = [path.join(home, ".pi", "agent"), path.join(home, ".local", "share", "pi-config")];
+const DEV_REPO = path.join(home, "workspace", "projects", "pi-config");
+const inside = (abs: string, dir: string) => abs === dir || abs.startsWith(dir + path.sep);
 
 export default function (pi: ExtensionAPI) {
 	const git = async (cwd: string, args: string[]) => {
@@ -48,8 +52,11 @@ export default function (pi: ExtensionAPI) {
 		if (event.toolName === "write" || event.toolName === "edit") {
 			const p = String((event.input as { path?: unknown }).path ?? "");
 			const abs = path.resolve(ctx.cwd, p.startsWith("~/") ? path.join(home, p.slice(2)) : p);
-			if (DEPLOYED.some((d) => abs === d || abs.startsWith(d + path.sep))) {
+			if (DEPLOYED.some((d) => inside(abs, d))) {
 				return { block: true, reason: `pr-only: ${abs} is the deployed pi setup. Change the pi-config project instead (\`pikit path\`), on a branch.` };
+			}
+			if (ctx.hasUI && inside(abs, DEV_REPO)) {
+				return { block: true, reason: "pr-only: the main session doesn't edit pi-config. Delegate to build on a development branch with an acceptance test." };
 			}
 			return;
 		}

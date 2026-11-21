@@ -28,6 +28,7 @@ branch="${1:-$(G branch --show-current)}"
 [[ -n "$branch" ]] || die "you're not on a branch — name one: /ship <branch>"
 [[ "$branch" =~ ^(main|master|test)$ ]] && die "$branch is never shipped — ship the feature branch instead"
 G rev-parse -q --verify "refs/heads/$branch" >/dev/null || die "no local branch named $branch"
+[[ "$(G config --local --get pi.github)" != false ]] || die "GitHub is disabled for this project — run pinew to enable it"
 G remote | grep -qx origin || die "no GitHub remote — run: pi-gh-setup (or pinew) in this project"
 command -v gh >/dev/null && gh auth status >/dev/null 2>&1 || die "gh isn't logged in — run: gh auth login"
 
@@ -39,7 +40,7 @@ while read -r line; do
 	"branch refs/heads/$branch") checkout="$wt" ;;
 	esac
 done < <(G worktree list --porcelain)
-if [[ -n "$checkout" && -n "$(git -C "$checkout" status --porcelain --untracked-files=no)" ]]; then
+if [[ -n "$checkout" && -n "$(git -C "$checkout" status --porcelain)" ]]; then
 	die "uncommitted changes on $branch in $checkout — commit them first (ask pi, or /commit)"
 fi
 
@@ -82,11 +83,6 @@ mapfile -t ids < <(W diff --name-only "$base" HEAD -- openspec/changes \
 	| awk -F/ '$3 != "archive" && NF >= 4 { print $3 }' | sort -u)
 active=()
 for id in "${ids[@]}"; do [[ -d "$TMPD/wt/openspec/changes/$id" ]] && active+=("$id"); done
-archived_here="$(W diff --name-only --diff-filter=A "$base" HEAD -- openspec/changes/archive | head -n1)"
-
-if [[ "$branch" == feat/* && ${#active[@]} -eq 0 && -z "$archived_here" ]]; then
-	die "feat/ branches need an OpenSpec change — run /propose first (fix/, chore/ and docs/ branches don't)"
-fi
 if (( ${#active[@]} )); then
 	[[ -n "$OPENSPEC_BIN" ]] || die "openspec not found — run: pikit apply"
 fi
@@ -111,6 +107,7 @@ done
 
 # 3. Push (normal push, never forced) and move your local branch along
 new="$(W rev-parse HEAD)"
+(cd "$root" && "$KIT_DIR/bin/pi-check" "$new") || die "local checks failed for $new"
 if [[ "$new" != "$remote_tip" ]]; then
 	G push -q origin "$new:refs/heads/$branch" || die "push to GitHub was rejected — try /ship again"
 fi
@@ -141,7 +138,7 @@ else
 		if (( ${#adrs[@]} )); then echo; echo "## Decisions"; printf -- '- `%s`\n' "${adrs[@]}"; fi
 		echo
 		echo "---"
-		echo "CI (\`check\`) runs \`scripts/check.sh\` and the OpenSpec checks. Merge with **Create a merge commit** once it's green; deleting the branch afterwards is up to you."
+		echo "Local checks passed for $new. Merge with **Create a merge commit**."
 	} > "$body"
 	type="${branch%%/*}"; slug="${branch#*/}"
 	url="$(cd "$root" && gh pr create --base main --head "$branch" --title "$type: ${slug//-/ }" --body-file "$body")" \
@@ -150,5 +147,5 @@ else
 fi
 
 # `test` picks up the archive commit in the background
-[[ -x "$KIT_DIR/bin/pi-test-branch" ]] && ( "$KIT_DIR/bin/pi-test-branch" --repo "$root" --quiet >/dev/null 2>&1 & )
+[[ "$(G config --local --get pi.kit)" == true && -x "$KIT_DIR/bin/pi-test-branch" ]] && ( "$KIT_DIR/bin/pi-test-branch" --repo "$root" --quiet >/dev/null 2>&1 & )
 exit 0

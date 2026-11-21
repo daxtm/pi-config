@@ -6,7 +6,7 @@
 #   - uses your existing pi (pi.dev/install.sh); installs it only if missing
 #   - OpenSpec CLI, Exa/Tavily/Firecrawl MCP servers (pinned), Command Code provider, RTK
 #   - ~/.pi/agent: AGENTS.md, MAIN.md, agents/, prompts/, skills/, extensions/, settings + mcp keys
-#   - commands on PATH: pinew pikit pi-ship pi-branch pi-gh-setup pi-test-branch pi-takeover
+#   - commands on PATH: pinew pikit pi-ship pi-branch pi-gh-setup pi-test-branch
 #   - git hooks in your kit projects (keep `test` up to date)
 # Files this kit installed before but no longer ships are removed (tracked in ~/.pi/agent/.kit-manifest).
 #
@@ -64,7 +64,7 @@ render() { # src dest — fill {{PLACEHOLDERS}}, then install
 
 # ---- 1. prerequisites ---------------------------------------------------------------------
 info "Checking prerequisites"
-for c in git node npm flock; do command -v "$c" >/dev/null || die "$c is required"; done
+for c in git node npm flock python3; do command -v "$c" >/dev/null || die "$c is required"; done
 NODE_V="$(node -p 'process.versions.node')"
 version_ge "$NODE_V" "$MIN_NODE" || die "Node.js $NODE_V is too old; pi needs >= $MIN_NODE"
 ORIG_PATH="$PATH"
@@ -130,7 +130,10 @@ while IFS= read -r -d '' f; do install_file "$f" "$AGENT_DIR/skills/${f#"$KIT_DI
 	< <(find "$KIT_DIR/global/skills" -type f -print0)
 
 # subagent extension: Pi's official example for the pi version you run
-if (( DRY_RUN )); then echo "   [dry-run] fetch the subagent example from $PI_PKG@$PI_HAVE"; else
+if (( DRY_RUN )); then
+	echo "   [dry-run] fetch the subagent example from $PI_PKG@$PI_HAVE"
+	MANIFEST+=(extensions/subagent/index.ts extensions/subagent/agents.ts)
+else
 	mkdir -p "$TMP_DIR/pi-pkg"
 	tarball="$(npm pack --silent --pack-destination "$TMP_DIR/pi-pkg" "$PI_PKG@$PI_HAVE" | tail -n1)"
 	tar -xzf "$TMP_DIR/pi-pkg/$tarball" -C "$TMP_DIR/pi-pkg" package/examples/extensions/subagent
@@ -240,7 +243,12 @@ link_cmd() { # name target
 	run ln -sfn "$2" "$link"
 }
 link_cmd pinew "$KIT_DIR/new-project.sh"
-for c in pikit pi-ship pi-branch pi-gh-setup pi-test-branch pi-takeover; do link_cmd "$c" "$KIT_DIR/bin/$c"; done
+for c in pikit pi-check pi-ship pi-branch pi-gh-setup pi-test-branch; do link_cmd "$c" "$KIT_DIR/bin/$c"; done
+# links an earlier version made into this kit that now point nowhere (e.g. a retired command)
+for link in "$HOME"/.local/bin/*; do
+	[[ -L "$link" && ! -e "$link" ]] || continue
+	case "$(readlink "$link")" in "$KIT_DIR"/*) run rm -f "$link"; (( DRY_RUN )) || echo "   removed retired command $(basename "$link")" ;; esac
+done
 
 if (( ! DRY_RUN )); then
 	mkdir -p "$KIT_DIR/shell"
@@ -292,6 +300,7 @@ if (( ! DRY_RUN )); then
 fi
 
 echo
-ok "pi-config installed into $AGENT_DIR from $KIT_DIR"
+if (( DRY_RUN )); then ok "preview complete for $AGENT_DIR"
+else ok "pi-config installed into $AGENT_DIR from $KIT_DIR"; fi
 (( PATH_CHANGED )) && warn "PATH updated in $ZSHRC — run: exec zsh"
 exit 0

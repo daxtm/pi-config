@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
-# The project's checks: everything that must pass before a PR can merge. Run by pi's build agent
-# locally and by GitHub Actions (.github/workflows/ci.yml) on every PR — one script, same result.
-#
-# Rules for whoever fills this in (usually the build agent, in the first change that adds code):
-#   - work on a fresh clone: install dependencies first (npm ci, uv sync, pip install -e ., ...)
-#   - non-interactive, exits non-zero on any failure
-#   - tests, then lint/typecheck, then build — whatever the project has
+# Bootstrap check for a documentation-only scaffold. Replace it with the project's test/build command when adding code.
 set -euo pipefail
-cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.."
-
-# --- replace from here ---
-if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::warning::scripts/check.sh has no project checks yet"; fi
-echo "no project checks yet (fill in scripts/check.sh)"
+cd "$(dirname "$0")/.."
+while IFS= read -r -d '' file; do
+	case "$file" in
+	*.md|*.txt|.gitignore|.pi/prompts/*|.agents/skills/*|openspec/*|scripts/check.sh) ;;
+	*) echo "Wire the real checks for $file into scripts/check.sh" >&2; exit 1 ;;
+	esac
+done < <(git ls-files -z)
+test -s AGENTS.md && test -s openspec/config.yaml
