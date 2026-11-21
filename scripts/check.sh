@@ -19,6 +19,13 @@ else
 fi
 (( fail == before )) && echo "ok   ${#scripts[@]} shell scripts"
 
+# bin/pi-takeover behavior: temp-dir fixtures with a stub gh — no network, no real credentials
+if command -v git >/dev/null; then
+	bash scripts/test-pi-takeover.sh || bad "pi-takeover behavior"
+else
+	echo "skip pi-takeover tests (no git)"
+fi
+
 if command -v npx >/dev/null; then
 	n=0; before=$fail
 	for f in global/extensions/*.ts; do

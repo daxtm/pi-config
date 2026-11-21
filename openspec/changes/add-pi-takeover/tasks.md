@@ -34,6 +34,6 @@
       exits nonzero without mutation, and the happy path lands both remote refs at the captured
       SHA with the checkout unchanged. No network, no real credentials.
       Commit: `test: pi-takeover behavior, credential-free`.
-- [ ] 4.2 Wire it into `scripts/check.sh` (skip gracefully when git is missing), run
+- [x] 4.2 Wire it into `scripts/check.sh` (skip gracefully when git is missing), run
       `scripts/check.sh` and `./install.sh --dry-run`, confirm both pass end to end.
       Commit: `test: check.sh runs takeover tests`.
