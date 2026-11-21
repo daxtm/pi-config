@@ -440,8 +440,14 @@ do_sync() { # $1 = "wait" to wait for a running sync instead of leaving it a rer
 	while :; do
 		rm -f "$RERUN"
 		if (( FETCH )) && has_origin; then G fetch --quiet --prune origin || { echo "fetch failed — no sync performed" >&2; return 1; }; fi
+		if [[ "$(cfg pi.testbranch.managed)" == true && "$(cfg pi.testbranch.version)" != 3 ]]; then
+			if has_origin; then G fetch -q --prune origin; fi
+			if ref_exists refs/heads/test; then G update-ref refs/pi-kit/before-v3/test "$(G rev-parse refs/heads/test)"; fi
+			REBUILD=1
+		fi
 		push_branches
 		build
+		G config --local pi.testbranch.version 3
 		auto_live
 		sync_live
 		[[ -e "$RERUN" ]] || break

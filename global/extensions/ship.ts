@@ -1,7 +1,7 @@
 /**
  * /ship [branch] — runs bin/pi-ship: brings the branch up to date with main, checks and archives its
  * OpenSpec change, pushes, and opens (or updates) the PR to main. A script, not a prompt: no tokens,
- * same result every time. You merge the PR on GitHub once CI is green. Installed by pi-config.
+ * same result every time. You merge the PR on GitHub after local checks pass. Installed by pi-config.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
