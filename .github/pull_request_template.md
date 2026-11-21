@@ -4,4 +4,4 @@
 ## How to see it work
 
 ---
-CI (`check`) runs `scripts/check.sh` and the OpenSpec checks. Merge with **Create a merge commit** once it's green.
+Local validation: commit checked and observed result.

@@ -64,7 +64,7 @@ render() { # src dest — fill {{PLACEHOLDERS}}, then install
 
 # ---- 1. prerequisites ---------------------------------------------------------------------
 info "Checking prerequisites"
-for c in git node npm flock; do command -v "$c" >/dev/null || die "$c is required"; done
+for c in git node npm flock python3; do command -v "$c" >/dev/null || die "$c is required"; done
 NODE_V="$(node -p 'process.versions.node')"
 version_ge "$NODE_V" "$MIN_NODE" || die "Node.js $NODE_V is too old; pi needs >= $MIN_NODE"
 ORIG_PATH="$PATH"
@@ -243,7 +243,7 @@ link_cmd() { # name target
 	run ln -sfn "$2" "$link"
 }
 link_cmd pinew "$KIT_DIR/new-project.sh"
-for c in pikit pi-ship pi-branch pi-gh-setup pi-test-branch; do link_cmd "$c" "$KIT_DIR/bin/$c"; done
+for c in pikit pi-check pi-ship pi-branch pi-gh-setup pi-test-branch; do link_cmd "$c" "$KIT_DIR/bin/$c"; done
 # links an earlier version made into this kit that now point nowhere (e.g. a retired command)
 for link in "$HOME"/.local/bin/*; do
 	[[ -L "$link" && ! -e "$link" ]] || continue

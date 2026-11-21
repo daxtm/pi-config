@@ -171,6 +171,9 @@ cleanup_gone() { # local branches whose GitHub copy is gone → delete (if and o
 		[[ "$b" =~ ^(main|master|$TESTBR)$ ]] && continue
 		[[ "$up" == "[gone]" ]] || continue          # never pushed, or still on GitHub → keep
 		if grep -qxF "$b" <<<"$current"; then echo "kept $b (checked out — switch away and run cleanup again)"; continue; fi
+		if ! G merge-base --is-ancestor "refs/heads/$b" refs/remotes/origin/main; then
+			echo "kept $b (local tip is outside origin/main)"; continue
+		fi
 		n=$((n + 1))
 		if (( DRY_RUN )); then echo "would delete $b (gone from GitHub)"
 		else G branch -q -D "$b" && echo "deleted $b (gone from GitHub)"; fi
@@ -198,7 +201,9 @@ waiting_reason() { # branch sha base_sha -> prints why it isn't finished; return
 	if [[ -n "$why" ]]; then echo "$why"; return 1; fi
 	(( active )) && return 0
 	G diff --name-only --diff-filter=A "$base_sha...$sha" -- openspec/changes/archive | grep -q . && return 0
-	if [[ "$b" == feat/* ]]; then echo "no OpenSpec change yet"; return 1; fi
+	if [[ "$b" == feat/* ]] && ! G log -1 --format='%(trailers:key=Pi-Ready,valueonly)' "$sha" | grep -ixq yes; then
+		echo "direct feature awaits Pi-Ready: yes on its final commit"; return 1
+	fi
 	return 0
 }
 
@@ -292,6 +297,7 @@ build() {
 	if (( ${#waiting[@]} )); then printf 'waiting (not finished, not in test): %s\n' "${waiting[@]}" > "$WAITING"; else rm -f "$WAITING"; fi
 
 	if (( ${#todo[@]} == 0 && ! REBUILD )); then
+		(cd "$ROOT" && "$KIT_DIR/bin/pi-check" --cached "$start") > "$STATUS" 2>&1 || { cat "$STATUS" >&2; return 1; }
 		if [[ -z "$old" ]]; then
 			G update-ref -m "pi-test-branch" "refs/heads/$TESTBR" "$start"; G config --local pi.testbranch.managed true
 			old="$start"
@@ -312,7 +318,10 @@ build() {
 	local -A merged_tips=()
 	for i in "${!todo[@]}"; do
 		b="${labels[$i]}"; sha="${todo[$i]}"
-		if GW "$tmp/wt" merge --quiet --no-ff --no-edit -m "Merge $b into $TESTBR" "$sha" >/dev/null 2>&1; then
+		# Stable merge IDs let unchanged inputs reuse a failed or successful gate.
+		local stamp
+		stamp="$(GW "$tmp/wt" log -1 --format=%ct HEAD "$sha") +0000"
+		if GIT_AUTHOR_DATE="$stamp" GIT_COMMITTER_DATE="$stamp" GW "$tmp/wt" merge --quiet --no-ff --no-edit -m "Merge $b into $TESTBR" "$sha" >/dev/null 2>&1; then
 			merged+=("$b"); merged_tips["$b"]="$sha"
 		elif resolve_conflict "$tmp/wt" "$b" "$sha"; then
 			merged+=("$b (conflict resolved by the model)"); merged_tips["${merged[-1]}"]="$sha"
@@ -330,6 +339,7 @@ build() {
 		fi
 	done
 	local new; new="$(GW "$tmp/wt" rev-parse HEAD)"
+	(cd "$ROOT" && "$KIT_DIR/bin/pi-check" --cached "$new") > "$STATUS" 2>&1 || { cat "$STATUS" >&2; return 1; }
 	cleanup
 
 	follow_worktrees "$new"

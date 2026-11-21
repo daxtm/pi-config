@@ -76,7 +76,7 @@ if [[ "$1" == -p ]]; then
 fi
 EOF
 chmod +x "$STUBS/gh" "$STUBS/pi"
-for c in pi-test-branch pi-ship pi-branch pi-gh-setup; do ln -s "$ROOT/bin/$c" "$H/.local/bin/$c"; done
+for c in pi-check pi-test-branch pi-ship pi-branch pi-gh-setup; do ln -s "$ROOT/bin/$c" "$H/.local/bin/$c"; done
 ln -s "$ROOT/new-project.sh" "$H/.local/bin/pinew"
 
 export HOME="$H" FAKEGH="$GH" PI_CODING_AGENT_DIR="$H/.pi/agent" OPENSPEC_TELEMETRY=0
@@ -92,10 +92,10 @@ sync() { pi-test-branch "$@" >/dev/null 2>&1; }   # explicit sync; waits for any
 echo "pinew"
 (cd "$P" && pinew demo > "$LOG/pinew-demo.txt" 2>&1); D="$P/demo"
 check "new project gets a public GitHub repo" grep -qx PUBLIC "$GH/repos/demo.git.vis"
-check "main ruleset applied (PR + green CI enforced)" grep -q "rulesets on: main" "$LOG/pinew-demo.txt"
+check "main ruleset applied (PR required)" grep -q "rulesets on: main" "$LOG/pinew-demo.txt"
 check "secret push protection turned on" grep -q "push protection on" "$LOG/pinew-demo.txt"
 check "GitHub never auto-deletes branches" grep -q "delete_branch_on_merge=false" "$GH/calls.log"
-check "CI workflow and scripts/check.sh are in the repo" test -f "$D/.github/workflows/ci.yml" -a -x "$D/scripts/check.sh"
+check "local check is executable and redundant workflow absent" test ! -f "$D/.github/workflows/ci.yml" -a -x "$D/scripts/check.sh"
 check "test branch exists on GitHub" remote_has demo test
 
 (cd "$P" && pinew secret --private > "$LOG/pinew-private.txt" 2>&1)
@@ -136,6 +136,7 @@ check "unfinished feature kept out of test" bash -c "! git merge-base --is-ances
 st="$(pi-test-branch status 2>&1)"
 check "status lists it as waiting (0/1 tasks)" grep -q 'waiting.*feat/add-hello (add-hello: 0/1 tasks)' <<<"$st"
 check "ship refuses unchecked tasks" bash -c "! pi-ship"
+printf '#!/bin/bash\nset -eu\ntest "$(bin/hello)" = hello\n' > scripts/check.sh
 printf '#!/bin/sh\necho hello\n' > bin/hello; chmod +x bin/hello; sed -i 's/- \[ \]/- [x]/' openspec/changes/add-hello/tasks.md
 git add -A && git commit -q -m "feat: hello"; sync
 check "finished feature joins test" git merge-base --is-ancestor feat/add-hello test
@@ -166,6 +167,8 @@ git branch -q feat/gone origin/main; git push -q -u origin feat/gone 2>/dev/null
 git -C "$GH/repos/demo.git" branch -q -D feat/gone
 sync
 check "a branch you deleted on GitHub is never pushed back" bash -c "! git -C '$GH/repos/demo.git' rev-parse -q --verify refs/heads/feat/gone"
+pi-test-branch cleanup >/dev/null
+check "cleanup preserves unpublished commits on a gone branch" git show feat/gone:pending
 check "test contains everything merged to main" git merge-base --is-ancestor origin/main test
 
 # ---- pikit -------------------------------------------------------------------------------------
@@ -194,7 +197,8 @@ check "active change without tasks stays out of test" bash -c '! git merge-base 
 R="$P/rebuild"; git init -q --bare -b main "$GH/repos/rebuild.git"
 git clone -q "$GH/repos/rebuild.git" "$R" 2>/dev/null
 cd "$R" || exit 1
-echo base > base; git add base; git commit -q -m base; git push -q -u origin main 2>/dev/null
+echo base > base; mkdir -p scripts; printf '#!/bin/bash\ngrep -qx base base\n' > scripts/check.sh; chmod +x scripts/check.sh
+git add scripts base; git commit -q -m base; git push -q -u origin main 2>/dev/null
 git switch -q -c fix/abandoned; echo abandoned > abandoned; git add abandoned; git commit -q -m abandoned
 sync; pi-test-branch live-set "$T/rebuild-live" >/dev/null 2>&1
 git worktree add -q "$T/rebuild-test-checkout" test
@@ -216,7 +220,8 @@ check "rebuild updates a clean checkout of test" test ! -e "$T/rebuild-test-chec
 git init -q --bare -b legacy "$GH/repos/offline.git"; echo PUBLIC > "$GH/repos/offline.git.vis"
 git clone -q "$GH/repos/offline.git" "$P/offline" 2>/dev/null
 cd "$P/offline" || exit 1
-echo base > base; git add base; git commit -q -m base; git push -q -u origin legacy 2>/dev/null
+echo base > base; mkdir -p scripts; printf '#!/bin/bash\ngrep -qx base base\n' > scripts/check.sh; chmod +x scripts/check.sh
+git add scripts base; git commit -q -m base; git push -q -u origin legacy 2>/dev/null
 before_refs="$(git -C "$GH/repos/offline.git" show-ref)"; before_calls="$(wc -l < "$GH/calls.log")"
 echo 'user work' > unrelated.txt
 pinew --no-github > "$LOG/pinew-offline.txt" 2>&1
@@ -300,6 +305,20 @@ check "missing live branch is reported" bash -c " ! pi-test-branch live-set --ad
 check "failed adoption preserves the existing folder" grep -qx sentinel "$T/custom dir/sentinel"
 (cd "$R" && pi-branch fix/remote-only >"$LOG/remote-checkout" 2>&1)
 check "pi-branch resumes an existing remote branch" test "$(git rev-parse HEAD)" = "$remote_only"
+cd "$R" || exit 1
+git switch -qc fix/incompatible origin/main
+printf '#!/bin/bash\ntest ! -e other\n' > scripts/check.sh
+git add scripts/check.sh; git commit -qm constraint
+sync
+good="$(git rev-parse test)"
+git switch -qc fix/other origin/main; touch other; git add other; git commit -qm other
+check "individual branch passes local checks" "$ROOT/bin/pi-check" HEAD
+check "combined failure blocks preview" bash -c '! pi-test-branch sync'
+check "combined failure keeps last passing preview" test "$(git rev-parse test)" = "$good"
+printf '#!/bin/bash\nexit 1\n' > scripts/check.sh
+git add scripts/check.sh; git commit -qm broken
+check "ship refuses failing candidate" bash -c '! pi-ship'
+check "failed ship creates no PR" test ! -e "$GH/prs/fix_other"
 # ---- pr-only guard -----------------------------------------------------------------------------
 echo "guards"
 ESBUILD=(npx -y esbuild@0.28.2)

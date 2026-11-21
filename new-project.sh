@@ -133,12 +133,12 @@ place() { # template-relative path [mode]
 	if [ -n "${2:-}" ]; then chmod "$2" "$1"; fi
 	echo "created    $1"
 }
+python3 "$KIT_DIR/lib/project-v3.py" "$PROJECT_NAME"
 place AGENTS.md
 if grep -qiE 'opencode|/verify|verifier' AGENTS.md; then
 	echo "AGENTS.md  mentions OpenCode or the old verifier — ask pi to \"update AGENTS.md to the template in $TEMPLATE/AGENTS.md, keep the project facts\""
 fi
 place scripts/check.sh 755
-place .github/workflows/ci.yml
 place .github/pull_request_template.md
 place docs/adr/README.md
 place docs/adr/0000-template.md
@@ -181,7 +181,7 @@ done < <(git ls-files --others --exclude-standard -z)
 if git diff --cached --quiet; then
 	echo "git        nothing new to commit"
 else
-	PI_TEST_BRANCH=1 git commit -q -m "chore: set up the pi workflow (OpenSpec, ADRs, CI)"
+	PI_TEST_BRANCH=1 git commit -q -m "chore: set up the pi workflow (OpenSpec, ADRs, local checks)"
 	echo "git        committed the setup on $(git branch --show-current)"
 fi
 

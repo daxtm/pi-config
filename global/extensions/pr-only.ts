@@ -56,7 +56,7 @@ export default function (pi: ExtensionAPI) {
 				return { block: true, reason: `pr-only: ${abs} is the deployed pi setup. Change the pi-config project instead (\`pikit path\`), on a branch.` };
 			}
 			if (ctx.hasUI && inside(abs, DEV_REPO)) {
-				return { block: true, reason: "pr-only: the main session doesn't edit pi-config. Every change there goes through /propose (spec + build, with a test) — tell the user to run /propose <what they asked for>." };
+				return { block: true, reason: "pr-only: the main session doesn't edit pi-config. Delegate to build on a development branch with an acceptance test." };
 			}
 			return;
 		}

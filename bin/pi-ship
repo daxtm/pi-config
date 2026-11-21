@@ -83,11 +83,6 @@ mapfile -t ids < <(W diff --name-only "$base" HEAD -- openspec/changes \
 	| awk -F/ '$3 != "archive" && NF >= 4 { print $3 }' | sort -u)
 active=()
 for id in "${ids[@]}"; do [[ -d "$TMPD/wt/openspec/changes/$id" ]] && active+=("$id"); done
-archived_here="$(W diff --name-only --diff-filter=A "$base" HEAD -- openspec/changes/archive | head -n1)"
-
-if [[ "$branch" == feat/* && ${#active[@]} -eq 0 && -z "$archived_here" ]]; then
-	die "feat/ branches need an OpenSpec change — run /propose first (fix/, chore/ and docs/ branches don't)"
-fi
 if (( ${#active[@]} )); then
 	[[ -n "$OPENSPEC_BIN" ]] || die "openspec not found — run: pikit apply"
 fi
@@ -112,6 +107,7 @@ done
 
 # 3. Push (normal push, never forced) and move your local branch along
 new="$(W rev-parse HEAD)"
+(cd "$root" && "$KIT_DIR/bin/pi-check" "$new") || die "local checks failed for $new"
 if [[ "$new" != "$remote_tip" ]]; then
 	G push -q origin "$new:refs/heads/$branch" || die "push to GitHub was rejected — try /ship again"
 fi
@@ -142,7 +138,7 @@ else
 		if (( ${#adrs[@]} )); then echo; echo "## Decisions"; printf -- '- `%s`\n' "${adrs[@]}"; fi
 		echo
 		echo "---"
-		echo "CI (\`check\`) runs \`scripts/check.sh\` and the OpenSpec checks. Merge with **Create a merge commit** once it's green; deleting the branch afterwards is up to you."
+		echo "Local checks passed for `$new`. Merge with **Create a merge commit**."
 	} > "$body"
 	type="${branch%%/*}"; slug="${branch#*/}"
 	url="$(cd "$root" && gh pr create --base main --head "$branch" --title "$type: ${slug//-/ }" --body-file "$body")" \
