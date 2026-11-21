@@ -29,7 +29,7 @@
 
 ## 4. Checks
 
-- [ ] 4.1 Add `scripts/test-pi-takeover.sh`: temp-dir fixtures — a work repo, a bare `origin`, a
+- [x] 4.1 Add `scripts/test-pi-takeover.sh`: temp-dir fixtures — a work repo, a bare `origin`, a
       stub `gh` on PATH. Assert each refusal (existing remote branch, gh failure, not a repo)
       exits nonzero without mutation, and the happy path lands both remote refs at the captured
       SHA with the checkout unchanged. No network, no real credentials.
