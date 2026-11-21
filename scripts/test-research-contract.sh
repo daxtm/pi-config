@@ -65,15 +65,33 @@ check_main() { # global/MAIN.md
 }
 
 
+check_planner() { # global/prompts/propose.md and global/prompts/roadmap.md
+	local label="$1" c="$2" rc=0
+	has "$label" "$c" 'researcher' || rc=1
+	has "$label" "$c" 'outside facts' || rc=1
+	has "$label" "$c" 'explicit project task' || rc=1
+	has "$label" "$c" 'target root = this repo' || rc=1
+	has "$label" "$c" 'planning goal' || rc=1
+	has "$label" "$c" 'outside/codebase questions' || rc=1
+	has "$label" "$c" 'read-only lookups within that root' || rc=1
+	has "$label" "$c" '{previous}' || rc=1
+	return "$rc"
+}
+
+
 main() {
 	local research researcher
 	research="$(<"$ROOT/global/prompts/research.md")"
 	researcher="$(<"$ROOT/global/agents/researcher.md")"
 	mainc="$(<"$ROOT/global/MAIN.md")"
+	propose="$(<"$ROOT/global/prompts/propose.md")"
+	roadmap="$(<"$ROOT/global/prompts/roadmap.md")"
 
 	check_research "global/prompts/research.md" "$research" || fail=1
 	check_researcher "global/agents/researcher.md" "$researcher" || fail=1
 	check_main "global/MAIN.md" "$mainc" || fail=1
+	check_planner "global/prompts/propose.md" "$propose" || fail=1
+	check_planner "global/prompts/roadmap.md" "$roadmap" || fail=1
 
 	# Negative fixtures: in-memory copies with a required clause removed must fail the checks.
 	# (research.md minus the standalone/no-local-tools/non-steering clauses)
@@ -100,8 +118,20 @@ main() {
 		fail=1
 	fi
 
+
+	# (each planning caller minus its project opt-in or handoff)
+	for name in propose roadmap; do
+		local content
+		content="$(<"$ROOT/global/prompts/$name.md")"
+		broken="$(grep -v -e 'explicit project task' -e '{previous}' <<<"$content")"
+		if check_planner "negative:$name.md" "$broken" >/dev/null 2>&1; then
+			echo "FAIL negative fixture: $name.md checks pass without project scope/handoff"
+			fail=1
+		fi
+	done
+
 	if (( fail == 0 )); then
-		echo "ok   research contract checks (research, researcher, MAIN + negatives)"
+		echo "ok   research contract checks (research, researcher, MAIN, propose, roadmap + negatives)"
 	fi
 	return "$fail"
 }

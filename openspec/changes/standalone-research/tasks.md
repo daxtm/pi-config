@@ -12,7 +12,7 @@ Each checkbox is one small implementation commit. Keep `budgets.conf` unchanged.
 
 ## 3. Preserve project planning research
 
-- [ ] 3.1 Update the existing research steps in `global/prompts/propose.md` and `global/prompts/roadmap.md` to pass an explicit target-project root, planning goal, and relevant research questions, retaining scoped read-only lookups, outside-facts conditions, and `{previous}` spec handoffs. Extend the helper with checks for both callers and negative fixtures removing each caller's project opt-in or handoff; run the helper and `scripts/check.sh` within unchanged prompt budgets.
+- [x] 3.1 Update the existing research steps in `global/prompts/propose.md` and `global/prompts/roadmap.md` to pass an explicit target-project root, planning goal, and relevant research questions, retaining scoped read-only lookups, outside-facts conditions, and `{previous}` spec handoffs. Extend the helper with checks for both callers and negative fixtures removing each caller's project opt-in or handoff; run the helper and `scripts/check.sh` within unchanged prompt budgets.
 
 ## 4. Integration and observable acceptance
 
