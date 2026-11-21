@@ -27,10 +27,14 @@ if [[ -z "$(GW diff --name-only --diff-filter=U)" ]]; then
 	merge_done && exit 0
 fi
 
-# 2. the model
+# 2. the model (only when explicitly requested by the caller)
+[[ "${PI_RESOLVE_RECORDED_ONLY:-0}" != 1 ]] || exit 1
 command -v pi >/dev/null 2>&1 || { echo "pi-resolve: pi not on PATH" >&2; exit 1; }
 model="$(grep -E '^[[:space:]]*resolver[[:space:]]*=' "$KIT_DIR/agent-models.conf" 2>/dev/null | tail -n1 | cut -d= -f2- \
 	| sed -E 's/#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' || true)"
+if [[ "$model" == openai/gpt-6.1-sol:* && -f "$KIT_DIR/.kit-sol" ]]; then
+	[[ "$(<"$KIT_DIR/.kit-sol")" == openai/gpt-6.2-sol ]] && model="openai/gpt-6.2-sol:${model##*:}"
+fi
 into="$(GW branch --show-current 2>/dev/null || true)"; into="${into:-the branch being built}"
 {
 	echo "=== $(date '+%F %T') resolving $label (${sha:0:7}) into $into in $dir"

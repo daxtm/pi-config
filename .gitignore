@@ -1,5 +1,6 @@
 # --- pi-config: generated per machine ---
 .kit-paths
+.kit-sol
 shell/
 
 # --- pi-workflow-kit ---

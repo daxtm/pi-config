@@ -7,7 +7,7 @@
 #   branches wait — `status` lists them. Finished branches are merged in whenever they get new commits
 #   (normal merge commits, normal push — never forced). Changes on GitHub's `test`
 #   and on `main` are merged in too, so main is never ahead of test. Conflicts are resolved for you:
-#   first by git rerere (a resolution seen before), otherwise by the model (bin/pi-resolve). Merging
+#   first by git rerere (a resolution seen before), unfamiliar conflicts leave the preview unchanged. Merging
 #   happens in a throwaway worktree, so your working folder is never touched.
 #   `pi-test-branch rebuild` (you run it, never automatic): start `test` over from main + the branches
 #   that exist now (drops abandoned work), force-pushed with lease.
@@ -76,7 +76,6 @@ cfg() { G config --local --get "$1" 2>/dev/null || true; }
 STATUS="$COMMON/pi-test-branch.status"
 RERUN="$COMMON/pi-test-branch.rerun"
 LIVESTATUS="$COMMON/pi-test-branch.live"
-FAILED="$COMMON/pi-test-branch.unresolved"
 WAITING="$COMMON/pi-test-branch.waiting"   # unfinished branches, kept out of test   # "branch sha" the model couldn't resolve (retried after new commits)
 KIT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 TMPD=""
@@ -154,12 +153,9 @@ follow_worktrees() { # folders that have `test` checked out follow it (only if t
 
 resolve_conflict() { # dir label sha — bin/pi-resolve (rerere, then the model). 0 = resolved
 	local dir="$1" b="$2" sha="$3"
-	grep -qxF "$b $sha" "$FAILED" 2>/dev/null && return 1   # already failed at this commit; retried after new commits
 	echo "test branch: merging $b hit a conflict — resolving it…" > "$STATUS"
 	say "conflict merging $b — resolving it"
-	"$KIT_DIR/bin/pi-resolve" "$dir" "$b" "$sha" "$COMMON/pi-test-branch-resolve.log" && return 0
-	echo "$b $sha" >> "$FAILED"
-	return 1
+	PI_RESOLVE_RECORDED_ONLY=1 "$KIT_DIR/bin/pi-resolve" "$dir" "$b" "$sha" "$COMMON/pi-test-branch-resolve.log"
 }
 
 cleanup_gone() { # local branches whose GitHub copy is gone → delete (if and only if that)
@@ -314,28 +310,21 @@ build() {
 	TMPD="$(mktemp -d)"
 	local tmp="$TMPD"
 	G worktree add --quiet --detach "$tmp/wt" "$start"
-	local -a merged=() conflicts=()
-	local -A merged_tips=()
+	local -a merged=()
 	for i in "${!todo[@]}"; do
 		b="${labels[$i]}"; sha="${todo[$i]}"
 		# Stable merge IDs let unchanged inputs reuse a failed or successful gate.
 		local stamp
 		stamp="$(GW "$tmp/wt" log -1 --format=%ct HEAD "$sha") +0000"
 		if GIT_AUTHOR_DATE="$stamp" GIT_COMMITTER_DATE="$stamp" GW "$tmp/wt" merge --quiet --no-ff --no-edit -m "Merge $b into $TESTBR" "$sha" >/dev/null 2>&1; then
-			merged+=("$b"); merged_tips["$b"]="$sha"
+			merged+=("$b")
 		elif resolve_conflict "$tmp/wt" "$b" "$sha"; then
-			merged+=("$b (conflict resolved by the model)"); merged_tips["${merged[-1]}"]="$sha"
+			merged+=("$b (reused Git resolution)")
 		else
-			local files clash="" m
-			files="$(GW "$tmp/wt" diff --name-only --diff-filter=U | head -n 5 | paste -sd, -)"
-			GW "$tmp/wt" merge --abort >/dev/null 2>&1 || GW "$tmp/wt" reset --hard --quiet
-			for m in "${merged[@]}"; do
-				[[ "$m" == "${base#refs/*/}" || "$m" == "origin/$TESTBR" ]] && continue
-				if G diff --name-only "$base_sha...${merged_tips[$m]}" | grep -qxF -f <(tr ',' '\n' <<<"$files"); then
-					clash+="${clash:+, }$m"
-				fi
-			done
-			conflicts+=("$b clashes with ${clash:-what is already in $TESTBR} in ${files:-?} — the model couldn't resolve it (log: .git/pi-test-branch-resolve.log); it retries when $b gets new commits")
+			local files
+			files="$(GW "$tmp/wt" diff --name-only --diff-filter=U | sed -n '1,5p' | paste -sd, -)"
+			echo "conflict: $b conflicts in ${files:-unknown files}; preview unchanged. Update the branch or resolve against main with /ship." | tee "$STATUS" >&2
+			return 1
 		fi
 	done
 	local new; new="$(GW "$tmp/wt" rev-parse HEAD)"
@@ -346,11 +335,9 @@ build() {
 	G update-ref -m "pi-test-branch" "refs/heads/$TESTBR" "$new"
 	G config --local pi.testbranch.managed true
 	{
-		if (( ${#conflicts[@]} )); then echo "test branch: merged ${#merged[@]}, ${#conflicts[@]} conflict(s)"
-		else echo "test branch: up to date ✓"; fi
+		echo "test branch: up to date ✓"
 		echo "updated $(date '+%Y-%m-%d %H:%M') → ${new:0:7}"
 		(( ${#merged[@]} )) && echo "merged in: ${merged[*]}"
-		for c in "${conflicts[@]}"; do echo "conflict: $c"; done
 		[[ -f "$STATUS.tmp" ]] && cat "$STATUS.tmp"
 	} > "$STATUS"
 	rm -f "$STATUS.tmp"
@@ -363,7 +350,6 @@ build() {
 		push_test
 	fi
 	say "$(head -n1 "$STATUS")"
-	for c in "${conflicts[@]}"; do say "  conflict: $c"; done
 }
 
 COMFY_CONF="$HOME/.config/pi-kit/comfyui-path"
