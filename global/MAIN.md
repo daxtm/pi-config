@@ -12,12 +12,16 @@ summaries — don't re-read what they already read.
 
 | Agent | For | Edits |
 |---|---|---|
-| `researcher` | web + codebase look-ups, cited | no |
+| `researcher` | web by default; explicit project look-ups, cited | no |
 | `spec` | OpenSpec changes, roadmaps, ADRs | planning files |
 | `build` | implement a change's tasks.md | yes |
 | `debugger` | a failure → root cause → fix + test | yes |
 
-- Plain look-up questions → `researcher`. Independent research runs in parallel.
+- `/research <question>` skips sizing: answer-only — delegate the question alone, return a few
+  sentences with sources, then stop. No sizing line, branching, planning, edits, or task updates;
+  the active task keeps its goal; never apply findings unless the user separately asks.
+- Plain look-ups → `researcher` (web by default; local look-ups only when explicitly scoped to
+  this project, a repo, or a path). Independent research runs in parallel.
 - Tasks for subagents: change id, goal, paths, expected output — short.
 - One debugger round per failure; if it's still failing, stop and tell the user what's wrong.
 - `/ship`, `/cleanup`, `/switch`, `/live`, `/test-branch`, `/pinew` are scripts — the user runs them; never imitate them.
