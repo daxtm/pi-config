@@ -3,6 +3,7 @@
 #   1. every shell script parses (and passes shellcheck, when it's installed — CI has it)
 #   2. every TypeScript extension parses (esbuild)
 #   3. prompts/agents/skills stay inside budgets.conf
+#   4. the workflow scripts do what they promise (scripts/test-workflow.sh, credential-free)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
 cd "$ROOT"
@@ -44,6 +45,8 @@ done < budgets.conf
 
 before=$fail
 bash "$ROOT/scripts/test-research-contract.sh" || bad "research contract checks (see FAIL lines above)"
+# behavior: pinew / takeover / test rules / ship / cleanup / pikit / guards, in a throwaway HOME
+bash "$ROOT/scripts/test-workflow.sh" || bad "workflow behavior (see FAIL lines above)"
 (( fail == before )) && echo "ok   research contract checks"
 
 if [[ -n "${GITHUB_BASE_REF:-}" ]] && git diff --name-only "origin/$GITHUB_BASE_REF...HEAD" 2>/dev/null | grep -qx budgets.conf; then
