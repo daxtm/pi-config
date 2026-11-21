@@ -6,7 +6,7 @@
 #   - uses your existing pi (pi.dev/install.sh); installs it only if missing
 #   - OpenSpec CLI, Exa/Tavily/Firecrawl MCP servers (pinned), Command Code provider, RTK
 #   - ~/.pi/agent: AGENTS.md, MAIN.md, agents/, prompts/, skills/, extensions/, settings + mcp keys
-#   - commands on PATH: pinew pikit pi-ship pi-branch pi-gh-setup pi-test-branch
+#   - commands on PATH: pinew pikit pi-ship pi-branch pi-gh-setup pi-test-branch pi-takeover
 #   - git hooks in your kit projects (keep `test` up to date)
 # Files this kit installed before but no longer ships are removed (tracked in ~/.pi/agent/.kit-manifest).
 #
@@ -240,7 +240,7 @@ link_cmd() { # name target
 	run ln -sfn "$2" "$link"
 }
 link_cmd pinew "$KIT_DIR/new-project.sh"
-for c in pikit pi-ship pi-branch pi-gh-setup pi-test-branch; do link_cmd "$c" "$KIT_DIR/bin/$c"; done
+for c in pikit pi-ship pi-branch pi-gh-setup pi-test-branch pi-takeover; do link_cmd "$c" "$KIT_DIR/bin/$c"; done
 
 if (( ! DRY_RUN )); then
 	mkdir -p "$KIT_DIR/shell"

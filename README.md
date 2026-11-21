@@ -40,6 +40,12 @@ Repos are public because **GitHub Free enforces rulesets on public repos only** 
 repo). `--private` exists, but then main is unprotected and pi-gh-setup warns about it. Re-run `pinew` in an existing project to
 bring it up to date (the changes arrive as a PR).
 
+## Existing repos: `pi-takeover [repo-dir]`
+One-time bootstrap (ADR-0004) for a GitHub repo that has neither remote `main` nor `test`: it pushes
+both branches at the current HEAD (creation-only — it refuses if either branch already exists, and
+never updates existing refs, the checkout, or local branches), then runs `pi-gh-setup` on it. Next
+step afterwards: `pi-branch chore/repo-baseline`.
+
 ## Changing this setup
 This repo is a normal project: `/propose`, `/apply`, `/ship`, merge. `pikit` deploys what's on
 **main** into `~/.local/share/pi-config` → `~/.pi/agent` (pi checks at startup; or run `pikit apply`).

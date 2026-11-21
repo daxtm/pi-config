@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# pi-takeover — one-time bootstrap of an existing GitHub repository into the kit's branch workflow
+# (ADR-0004). Creates remote `main` and `test` at the current HEAD — both must be absent remotely —
+# then applies the kit's GitHub settings via `pi-gh-setup`.
+#
+# It refuses whenever either remote branch exists (takeover already happened or doesn't apply), and
+# it never updates an existing remote branch, touches the checkout or local branches, or changes the
+# GitHub default branch. Existing agent restrictions are never suspended: only this kit script
+# bootstraps the refs. After a successful takeover the next step is `pi-branch chore/repo-baseline`.
+#
+# Usage: pi-takeover [repo-dir]     (default: current folder; needs `gh auth login`)
+set -euo pipefail
+
+dir="${1:-$PWD}"
+cd "$dir"
+
+# ---- prerequisites (all checked before any mutation) ---------------------------------------
+git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "pi-takeover: $dir is not a git repo" >&2; exit 1; }
+# capture HEAD before any network step — the branches are created from this commit
+head="$(git rev-parse HEAD 2>/dev/null)" || { echo "pi-takeover: $dir has no commit at HEAD — make a commit first" >&2; exit 1; }
+git remote get-url origin >/dev/null 2>&1 || { echo "pi-takeover: $dir has no 'origin' remote" >&2; exit 1; }
+command -v gh >/dev/null && gh auth status >/dev/null 2>&1 || { echo "pi-takeover: gh isn't logged in (gh auth login)" >&2; exit 1; }
+gh repo view --json nameWithOwner -q .nameWithOwner >/dev/null 2>&1 || { echo "pi-takeover: no GitHub repo resolvable for $dir" >&2; exit 1; }
+
+# ---- refuse if either bootstrap branch exists (live remote check, never cached refs) --------
+if ! ls_out="$(git ls-remote origin refs/heads/main refs/heads/test 2>&1)"; then
+	echo "pi-takeover: couldn't query remote branches on origin — refusing to guess:" >&2
+	printf '%s\n' "$ls_out" | sed 's/^/           /' >&2
+	exit 1
+fi
+conflicts="$(awk -F'\t' '$2=="refs/heads/main"{m=1} $2=="refs/heads/test"{t=1} END{r=""; if(m)r="main"; if(t)r=(r?r", ":"")"test"; print r}' <<<"$ls_out")"
+if [[ -n "$conflicts" ]]; then
+	echo "pi-takeover: origin already has refs/heads/$conflicts — takeover only bootstraps repos with neither main nor test." >&2
+	echo "           If you only need the GitHub settings, run: pi-gh-setup \"$dir\"" >&2
+	exit 1
+fi
+
+# ---- bootstrap: create both branches at the captured HEAD (creation-only leases) ------------
+# Each empty expected value permits creating the ref but never moving an existing one, so a branch
+# created concurrently between the ls-remote check and this push makes the push fail instead of
+# being overwritten. No local branches are created and the checkout is untouched.
+if ! push_err="$(git push --force-with-lease=refs/heads/main: --force-with-lease=refs/heads/test: \
+	origin "$head":refs/heads/main "$head":refs/heads/test 2>&1)"; then
+	echo "pi-takeover: creating origin/main and origin/test failed — no GitHub setup was run:" >&2
+	printf '%s\n' "$push_err" | sed 's/^/           /' >&2
+	exit 1
+fi
+echo "pi-takeover: created origin/main and origin/test at $head"
+
+# ---- handoff: the kit's GitHub settings and rulesets, same repo, output and status verbatim ---
+kit_dir="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+"$kit_dir/pi-gh-setup" "$dir"
+
+echo
+echo "takeover    baseline $head"
+echo "takeover    created origin/main and origin/test at $head"
+echo "takeover    github settings + rulesets: applied (see above)"
+echo "next        run inside $dir:  pi-branch chore/repo-baseline"
