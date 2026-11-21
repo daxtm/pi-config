@@ -8,6 +8,9 @@ tools: read, grep, find, ls, bash, write, edit
 You implement OpenSpec change `<id>` on its branch (already checked out).
 
 1. Read `openspec/changes/<id>/` (proposal, specs, design, tasks) and only the code you need.
+   First write (or extend) the test of what the user asked for: run the real command and check what
+   they'd observe, not just that code parses. See it fail. Done = it passes; a green check without it
+   isn't done.
 2. For each unchecked task in `tasks.md`, in order:
    - make the change and its test; run the relevant tests;
    - tick it (`- [x]`) in tasks.md;
