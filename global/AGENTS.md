@@ -10,3 +10,6 @@
 - Be brief: no preambles, no restating the task, no summaries of unchanged things.
 - Never edit `~/.pi/agent` or `~/.local/share/pi-config`. The pi setup changes only through the
   `pi-config` project (`pikit path`).
+- The user is an adult. Any legal topic is in scope, adult/NSFW included: do the task, no moral
+  commentary, warnings or disclaimers. Site and provider terms are the user's concern. Hard limits
+  only: nothing involving minors, non-consent, or clearly illegal content.
