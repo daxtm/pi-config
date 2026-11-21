@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# pi-gh-setup — GitHub settings for a kit project (safe to re-run any time).
+#
+#   Repo settings:  merge commits only (no squash/rebase — keeps `test` and main in step),
+#                   branches are NOT auto-deleted (you choose "Delete branch" on the merged PR),
+#                   no auto-merge, no wiki/projects.
+#   Ruleset "main": changes only through a PR, required status check `check` (GitHub Actions),
+#                   no force-push, no deletion. 0 approvals (you can't approve your own PR).
+#   Ruleset "test": no deletion (force-push stays allowed: `/test-branch rebuild` needs it).
+#
+# GitHub Free enforces rulesets on PUBLIC repos only (pinew creates public repos for that reason).
+# On a private repo this script applies the repo settings, then warns that main is unprotected and
+# prints the command to make the repo public — it never changes visibility itself.
+#
+# Usage: pi-gh-setup [repo-dir]     (default: current folder; needs `gh auth login`)
+set -euo pipefail
+
+dir="${1:-$PWD}"
+cd "$dir"
+git rev-parse --show-toplevel >/dev/null 2>&1 || { echo "pi-gh-setup: $dir is not a git repo" >&2; exit 1; }
+command -v gh >/dev/null && gh auth status >/dev/null 2>&1 || { echo "pi-gh-setup: gh isn't logged in (gh auth login)" >&2; exit 1; }
+repo="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null)" || { echo "pi-gh-setup: no GitHub repo for $dir" >&2; exit 1; }
+visibility="$(gh repo view --json visibility -q .visibility)"
+
+gh api -X PATCH "repos/$repo" --silent \
+	-F allow_merge_commit=true -F allow_squash_merge=false -F allow_rebase_merge=false \
+	-F delete_branch_on_merge=false -F allow_auto_merge=false -F allow_update_branch=true \
+	-F has_wiki=false -F has_projects=false
+echo "github     $repo: merge commits only; branches kept until you delete them on the merged PR"
+
+if [[ "$visibility" == "PUBLIC" ]]; then
+	# free on public repos: GitHub rejects a push that contains a recognised secret (API key, token…)
+	if gh api -X PATCH "repos/$repo" --silent --input - <<<'{"security_and_analysis":{"secret_scanning":{"status":"enabled"},"secret_scanning_push_protection":{"status":"enabled"}}}' 2>/dev/null; then
+		echo "github     secret scanning + push protection on (pushes containing secrets are rejected)"
+	else
+		echo "github     couldn't turn on secret push protection — enable it in the repo's Settings → Code security"
+	fi
+fi
+
+ruleset() { # name json
+	local name="$1" json="$2" id err
+	id="$(gh api "repos/$repo/rulesets" -q ".[] | select(.name == \"$name\") | .id" 2>/dev/null | head -n1 || true)"
+	if [[ -n "$id" ]]; then
+		err="$(gh api -X PUT "repos/$repo/rulesets/$id" --input - <<<"$json" 2>&1 >/dev/null)" || { echo "$err"; return 1; }
+	else
+		err="$(gh api -X POST "repos/$repo/rulesets" --input - <<<"$json" 2>&1 >/dev/null)" || { echo "$err"; return 1; }
+	fi
+}
+
+MAIN_RULES='{
+  "name": "main", "target": "branch", "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/main"], "exclude": [] } },
+  "rules": [
+    { "type": "deletion" },
+    { "type": "non_fast_forward" },
+    { "type": "pull_request", "parameters": {
+        "allowed_merge_methods": ["merge"],
+        "dismiss_stale_reviews_on_push": false, "require_code_owner_review": false,
+        "require_last_push_approval": false, "required_approving_review_count": 0,
+        "required_review_thread_resolution": false } },
+    { "type": "required_status_checks", "parameters": {
+        "strict_required_status_checks_policy": false,
+        "required_status_checks": [ { "context": "check" } ] } }
+  ]
+}'
+TEST_RULES='{
+  "name": "test", "target": "branch", "enforcement": "active",
+  "conditions": { "ref_name": { "include": ["refs/heads/test"], "exclude": [] } },
+  "rules": [ { "type": "deletion" } ]
+}'
+
+if out="$(ruleset main "$MAIN_RULES")" && out2="$(ruleset test "$TEST_RULES")"; then
+	echo "github     rulesets on: main (PR + green CI required), test (no deletion)"
+elif [[ "$visibility" != "PUBLIC" ]] && grep -qiE 'upgrade|not available|403|plan' <<<"${out:-}${out2:-}"; then
+	echo "github     WARNING: $repo is private — GitHub Free can't enforce rulesets there, so main is UNPROTECTED."
+	echo "           To protect it, make it public (check it has no secrets first), then re-run pi-gh-setup:"
+	echo "             gh repo edit $repo --visibility public --accept-visibility-change-consequences && pi-gh-setup \"$dir\""
+else
+	echo "github     ruleset setup failed:" >&2
+	printf '%s\n' "${out:-}" "${out2:-}" | sed '/^$/d; s/^/           /' >&2
+	exit 1
+fi

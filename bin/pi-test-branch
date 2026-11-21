@@ -1,0 +1,408 @@
+#!/usr/bin/env bash
+# pi-test-branch — keeps the `test` branch and the live copy up to date.
+#
+#   `test` is a normal branch, pushed to GitHub. Whenever a feature branch gets new commits it is
+#   merged into `test` (normal merge commits, normal push — never forced). Changes on GitHub's `test`
+#   and on `main` are merged in too, so main is never ahead of test. Conflicts are resolved for you:
+#   first by git rerere (a resolution seen before), otherwise by the model (bin/pi-resolve). Merging
+#   happens in a throwaway worktree, so your working folder is never touched.
+#   `pi-test-branch rebuild` (you run it, never automatic): start `test` over from main + the branches
+#   that exist now (drops abandoned work), force-pushed with lease.
+#
+# Cleanup (`pi-test-branch cleanup`, or /cleanup in pi — only when you run it, never automatic):
+# deletes each local branch if and only if it no longer exists on GitHub (you deleted it there).
+# Never-pushed branches, main, test and checked-out branches are left alone. Never deletes on GitHub.
+#
+# ComfyUI nodes: when the test branch contains a ComfyUI node (NODE_CLASS_MAPPINGS / [tool.comfy]),
+# a live copy is created automatically at <ComfyUI>/custom_nodes/<project> following `test`.
+# ComfyUI is found via $COMFYUI_PATH, ~/.config/pi-kit/comfyui-path, or a search of your home folder.
+#
+# Runs automatically (git hooks post-commit/post-merge/post-rewrite, and pi after every turn).
+# Does nothing when nothing changed. Safe to run any time, from any folder of the repo.
+#
+# Usage:
+#   pi-test-branch [sync] [--fetch] [--quiet] [--repo DIR]   rebuild if needed + update live copy
+#   pi-test-branch status                                              show test branch + live copy state
+#   pi-test-branch rebuild                                             start test over (see above)
+#   pi-test-branch cleanup [--dry-run]        delete local branches that are gone from GitHub (see above)
+#   pi-test-branch live-set <path> [branch]   make <path> a live copy following [branch] (default test)
+#   pi-test-branch live-branch <branch>       make the live copy follow another branch
+#   pi-test-branch live-restart [command]     run <command> in the live copy after each update ("" = none)
+#   pi-test-branch live-off                   stop managing the live copy (the folder is left as is)
+#   --adopt   (with sync/live-set) if the live folder already exists and isn't ours, move it to
+#             ~/.local/share/pi-kit/live-backups/ (outside custom_nodes) and take over
+set -euo pipefail
+export PI_TEST_BRANCH=1   # our own git operations must not re-trigger the hooks
+# When run from a git hook, git exports GIT_DIR/GIT_INDEX_FILE/etc. for the hook's repo; clear them
+# so our own git commands (temp worktree, live copy) use their own folders.
+# shellcheck disable=SC2046
+unset $(git rev-parse --local-env-vars 2>/dev/null) GIT_PREFIX 2>/dev/null || true
+
+TESTBR="test"   # the managed test branch
+CMD="sync"; FETCH=0; QUIET=0; ADOPT=0; DRY_RUN=0; REPO="$PWD"; ARGS=()
+while (( $# )); do
+	case "$1" in
+	--fetch) FETCH=1 ;;
+	--quiet) QUIET=1 ;;
+	--adopt) ADOPT=1 ;;
+	--dry-run) DRY_RUN=1 ;;
+	--repo) REPO="${2:?--repo needs a dir}"; shift ;;
+	-h|--help) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+	sync|status|rebuild|cleanup|live-set|live-branch|live-restart|live-off) CMD="$1" ;;
+	*) ARGS+=("$1") ;;
+	esac
+	shift
+done
+
+say()  { (( QUIET )) || printf '%s\n' "$*"; }
+ROOT="$(git -C "$REPO" rev-parse --show-toplevel 2>/dev/null)" || { echo "pi-test-branch: not a git repo: $REPO" >&2; exit 1; }
+COMMON="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir)"
+G()  { git -C "$ROOT" -c core.hooksPath=/dev/null "$@"; }
+GW() { local d="$1"; shift; git -C "$d" -c core.hooksPath=/dev/null "$@"; }
+cfg() { G config --local --get "$1" 2>/dev/null || true; }
+
+STATUS="$COMMON/pi-test-branch.status"
+RERUN="$COMMON/pi-test-branch.rerun"
+LIVESTATUS="$COMMON/pi-test-branch.live"
+FAILED="$COMMON/pi-test-branch.unresolved"   # "branch sha" the model couldn't resolve (retried after new commits)
+KIT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+TMPD=""
+cleanup() { if [[ -n "$TMPD" ]]; then G worktree remove --force "$TMPD/wt" >/dev/null 2>&1 || true; rm -rf "$TMPD"; G worktree prune >/dev/null 2>&1 || true; TMPD=""; fi; }
+trap cleanup EXIT
+
+has_origin() { G remote | grep -qx origin; }
+ref_exists() { G rev-parse -q --verify "$1^{commit}" >/dev/null 2>&1; }
+resolve() { # branch -> commit sha (local branch, else origin/<branch>)
+	if ref_exists "refs/heads/$1"; then G rev-parse "refs/heads/$1"
+	elif ref_exists "refs/remotes/origin/$1"; then G rev-parse "refs/remotes/origin/$1"
+	else return 1; fi
+}
+tracked_dirty() { [[ -n "$(GW "$1" status --porcelain --untracked-files=no 2>/dev/null)" ]]; }
+
+base_ref() { # newest of main/origin/main (or master)
+	local name
+	for name in main master; do
+		local l="" r=""
+		ref_exists "refs/heads/$name" && l="refs/heads/$name"
+		ref_exists "refs/remotes/origin/$name" && r="refs/remotes/origin/$name"
+		if [[ -n "$l" && -n "$r" ]]; then
+			if G merge-base --is-ancestor "$r" "$l"; then echo "$l"; else echo "$r"; fi
+			return 0
+		fi
+		[[ -n "$l" ]] && { echo "$l"; return 0; }
+		[[ -n "$r" ]] && { echo "$r"; return 0; }
+	done
+	return 1
+}
+
+sync_live() {
+	local live branch want have restart
+	live="$(cfg pi.live.path)"; [[ -n "$live" ]] || return 0
+	branch="$(cfg pi.live.branch)"; branch="${branch:-$TESTBR}"
+	if [[ ! -d "$live" ]]; then echo "live copy missing: $live (run /live set again)" > "$LIVESTATUS"; return 0; fi
+	if [[ "$branch" =~ ^(main|master)$ ]]; then
+		# local main is never pulled; the newest of main/origin/main is what was merged
+		want="$(G rev-parse "$(base_ref)")" || { echo "live copy: no main branch" > "$LIVESTATUS"; return 0; }
+	else
+		want="$(resolve "$branch")" || { echo "live copy: branch $branch not found" > "$LIVESTATUS"; return 0; }
+	fi
+	have="$(GW "$live" rev-parse HEAD 2>/dev/null || true)"
+	if [[ "$want" == "$have" ]]; then echo "live copy → $branch @ ${want:0:7}" > "$LIVESTATUS"; return 0; fi
+	if tracked_dirty "$live"; then
+		echo "live copy NOT updated: files edited in $live (check: git -C $live status)" > "$LIVESTATUS"
+		return 0
+	fi
+	GW "$live" checkout --quiet --detach "$want"
+	say "live copy → $branch @ $(GW "$live" log -1 --format='%h %s')"
+	echo "live copy → $branch @ ${want:0:7} ($(date '+%H:%M'))" > "$LIVESTATUS"
+	restart="$(cfg pi.live.restart)"
+	if [[ -n "$restart" ]]; then
+		(cd "$live" && nohup bash -c "$restart" >> "$COMMON/pi-live-restart.log" 2>&1 9>&- &)   # 9>&-: don't hold our lock
+		say "live restart: $restart"
+	fi
+}
+
+push_test() { # normal push (never forced); a rejected push is retried on the next run
+	has_origin || return 0
+	if ! G push --quiet origin "refs/heads/$TESTBR:refs/heads/$TESTBR" 2>/dev/null; then
+		echo "push of $TESTBR to GitHub failed (will retry)" >> "$STATUS"
+		return 0
+	fi
+}
+
+follow_worktrees() { # folders that have `test` checked out follow it (only if they have no edits)
+	local new="$1" wt="" line
+	while read -r line; do
+		case "$line" in
+		"worktree "*) wt="${line#worktree }" ;;
+		"branch refs/heads/$TESTBR")
+			if tracked_dirty "$wt"; then echo "$wt is on $TESTBR with edits — not updated" >> "$STATUS"
+			else GW "$wt" reset --hard --quiet "$new"; fi ;;
+		esac
+	done < <(G worktree list --porcelain)
+}
+
+resolve_conflict() { # dir label sha — bin/pi-resolve (rerere, then the model). 0 = resolved
+	local dir="$1" b="$2" sha="$3"
+	grep -qxF "$b $sha" "$FAILED" 2>/dev/null && return 1   # already failed at this commit; retried after new commits
+	echo "test branch: merging $b hit a conflict — resolving it…" > "$STATUS"
+	say "conflict merging $b — resolving it"
+	"$KIT_DIR/bin/pi-resolve" "$dir" "$b" "$sha" "$COMMON/pi-test-branch-resolve.log" && return 0
+	echo "$b $sha" >> "$FAILED"
+	return 1
+}
+
+cleanup_gone() { # local branches whose GitHub copy is gone → delete (if and only if that)
+	has_origin || { echo "no GitHub remote — nothing to clean up"; return 0; }
+	G fetch --quiet --prune origin || { echo "couldn't reach GitHub — nothing deleted" >&2; return 1; }
+	local b up n=0 current
+	current="$(G worktree list --porcelain | sed -n 's|^branch refs/heads/||p')"
+	while read -r b up; do
+		[[ "$b" =~ ^(main|master|$TESTBR)$ ]] && continue
+		[[ "$up" == "[gone]" ]] || continue          # never pushed, or still on GitHub → keep
+		if grep -qxF "$b" <<<"$current"; then echo "kept $b (checked out — switch away and run cleanup again)"; continue; fi
+		n=$((n + 1))
+		if (( DRY_RUN )); then echo "would delete $b (gone from GitHub)"
+		else G branch -q -D "$b" && echo "deleted $b (gone from GitHub)"; fi
+	done < <(G for-each-ref --format='%(refname:short) %(upstream:track)' refs/heads)
+	(( n )) || echo "nothing to clean up"
+}
+
+# build: merge everything new into `test` (persistent branch, pushed to GitHub).
+#   REBUILD=1: start over from main instead (used by `rebuild`; force-pushed with lease).
+REBUILD=0
+build() {
+	local base base_sha start old="" b sha
+	base="$(base_ref)" || { say "no main branch yet — nothing to build"; return 0; }
+	base_sha="$(G rev-parse "$base")"
+
+	if ref_exists "refs/heads/$TESTBR" && [[ "$(cfg pi.testbranch.managed)" != "true" ]]; then
+		echo "test branch: a branch named '$TESTBR' already exists and isn't managed by the kit — left alone. Rename it (git branch -m $TESTBR my-old-test) to let the kit manage '$TESTBR'." > "$STATUS"
+		say "$(cat "$STATUS")"; return 0
+	fi
+
+	ref_exists "refs/heads/$TESTBR" && old="$(G rev-parse "refs/heads/$TESTBR")"
+	local remote_sha=""
+	ref_exists "refs/remotes/origin/$TESTBR" && remote_sha="$(G rev-parse "refs/remotes/origin/$TESTBR")"
+
+	if (( REBUILD )); then start="$base_sha"
+	elif [[ -n "$old" ]]; then start="$old"
+	elif [[ -n "$remote_sha" ]]; then start="$remote_sha"
+	else start="$base_sha"; fi
+
+	# What needs merging: GitHub's test (if ahead), main, then every branch not yet in test (oldest first)
+	local -a todo=() labels=()
+	if (( ! REBUILD )) && [[ -n "$remote_sha" ]] && ! G merge-base --is-ancestor "$remote_sha" "$start"; then
+		todo+=("$remote_sha"); labels+=("origin/$TESTBR")
+	fi
+	# main must never be ahead of test; if it is (e.g. a squash-merged promotion PR), merge it back in
+	G merge-base --is-ancestor "$base_sha" "$start" || { todo+=("$base_sha"); labels+=("${base#refs/*/}"); }
+	while read -r b sha; do
+		[[ "$b" =~ ^(main|master|$TESTBR)$ ]] && continue
+		G merge-base --is-ancestor "$sha" "$start" && continue           # already in test
+		G merge-base --is-ancestor "$sha" "$base_sha" && continue        # already in main (merged PR)
+		todo+=("$sha"); labels+=("$b")
+	done < <(G for-each-ref --sort=committerdate --format='%(refname:short) %(objectname)' refs/heads)
+
+	if (( ${#todo[@]} == 0 )); then
+		if [[ -z "$old" ]]; then
+			G update-ref -m "pi-test-branch" "refs/heads/$TESTBR" "$start"; G config --local pi.testbranch.managed true
+			old="$start"
+		fi
+		# pushed but GitHub copy behind (e.g. earlier push failed)?
+		if has_origin && [[ "$remote_sha" != "$old" ]] && { [[ -z "$remote_sha" ]] || G merge-base --is-ancestor "$remote_sha" "$old"; }; then push_test; fi
+		return 0
+	fi
+
+	G config --local rerere.enabled true
+	G config --local rerere.autoupdate true
+	rm -f "$STATUS.tmp"
+	TMPD="$(mktemp -d)"
+	local tmp="$TMPD"
+	G worktree add --quiet --detach "$tmp/wt" "$start"
+	local -a merged=() conflicts=()
+	for i in "${!todo[@]}"; do
+		b="${labels[$i]}"; sha="${todo[$i]}"
+		if GW "$tmp/wt" merge --quiet --no-ff --no-edit -m "Merge $b into $TESTBR" "$sha" >/dev/null 2>&1; then
+			merged+=("$b")
+		elif resolve_conflict "$tmp/wt" "$b" "$sha"; then
+			merged+=("$b (conflict resolved by the model)")
+		else
+			local files clash="" m
+			files="$(GW "$tmp/wt" diff --name-only --diff-filter=U | head -n 5 | paste -sd, -)"
+			GW "$tmp/wt" merge --abort >/dev/null 2>&1 || GW "$tmp/wt" reset --hard --quiet
+			for m in "${merged[@]}"; do
+				[[ "$m" == "${base#refs/*/}" || "$m" == "origin/$TESTBR" ]] && continue
+				if G diff --name-only "$base_sha...$(G rev-parse "refs/heads/$m")" | grep -qxF -f <(tr ',' '\n' <<<"$files"); then
+					clash+="${clash:+, }$m"
+				fi
+			done
+			conflicts+=("$b clashes with ${clash:-what is already in $TESTBR} in ${files:-?} — the model couldn't resolve it (log: .git/pi-test-branch-resolve.log); it retries when $b gets new commits")
+		fi
+	done
+	local new; new="$(GW "$tmp/wt" rev-parse HEAD)"
+	cleanup
+
+	G update-ref -m "pi-test-branch" "refs/heads/$TESTBR" "$new"
+	G config --local pi.testbranch.managed true
+	{
+		if (( ${#conflicts[@]} )); then echo "test branch: merged ${#merged[@]}, ${#conflicts[@]} conflict(s)"
+		else echo "test branch: up to date ✓"; fi
+		echo "updated $(date '+%Y-%m-%d %H:%M') → ${new:0:7}"
+		(( ${#merged[@]} )) && echo "merged in: ${merged[*]}"
+		for c in "${conflicts[@]}"; do echo "conflict: $c"; done
+		[[ -f "$STATUS.tmp" ]] && cat "$STATUS.tmp"
+	} > "$STATUS"
+	rm -f "$STATUS.tmp"
+	follow_worktrees "$new"
+	if (( REBUILD )); then
+		if has_origin; then
+			G push --quiet --force-with-lease="refs/heads/$TESTBR:${remote_sha:-}" origin "refs/heads/$TESTBR:refs/heads/$TESTBR" 2>/dev/null \
+				|| echo "rebuild: push to GitHub was refused (someone pushed to $TESTBR meanwhile) — run rebuild again" >> "$STATUS"
+		fi
+	else
+		push_test
+	fi
+	say "$(head -n1 "$STATUS")"
+	for c in "${conflicts[@]}"; do say "  conflict: $c"; done
+}
+
+COMFY_CONF="$HOME/.config/pi-kit/comfyui-path"
+BACKUPS="$HOME/.local/share/pi-kit/live-backups"
+PROJECT_NAME="$(basename "$(dirname "$COMMON")")"
+
+is_our_worktree() { G worktree list --porcelain | grep -qxF "worktree $1"; }
+
+is_comfy_node() { # does the test branch (or HEAD) contain a ComfyUI node?
+	local src
+	src="$(resolve "$TESTBR" 2>/dev/null || G rev-parse -q --verify HEAD 2>/dev/null)" || return 1
+	G grep -qE 'NODE_CLASS_MAPPINGS|comfy_entrypoint|^\[tool\.comfy\]' "$src" -- '*.py' 'pyproject.toml' 2>/dev/null
+}
+
+comfy_root() { # ComfyUI install folder (has main.py, comfy/, custom_nodes/); search result is cached
+	local p cached=""
+	[[ -f "$COMFY_CONF" ]] && cached="$(head -n1 "$COMFY_CONF")"
+	for p in "${COMFYUI_PATH:-}" "$cached"; do
+		[[ -n "$p" && -f "$p/main.py" && -d "$p/custom_nodes" ]] && { echo "$p"; return 0; }
+	done
+	# Not found before: search at most once a day.
+	if [[ "$cached" == "none" ]] && (( $(date +%s) - $(stat -c %Y "$COMFY_CONF") < 86400 )); then return 1; fi
+	p="$(find "$HOME" -maxdepth 4 -path '*/.*' -prune -o -type d -name custom_nodes -print 2>/dev/null \
+		| while read -r d; do r="$(dirname "$d")"; [[ -f "$r/main.py" && -d "$r/comfy" ]] && echo "$r"; done | head -n1)"
+	mkdir -p "$(dirname "$COMFY_CONF")"
+	echo "${p:-none}" > "$COMFY_CONF"
+	[[ -n "$p" ]] && echo "$p"
+}
+
+make_live() { # path branch — create/register the live copy (no locking; caller syncs it)
+	local path="$1" branch="$2" sha
+	if ! is_our_worktree "$path"; then
+		if [[ -e "$path" ]]; then
+			(( ADOPT )) || return 3
+			mkdir -p "$BACKUPS"
+			local backup; backup="$BACKUPS/$(basename "$path")-$(date +%Y%m%d-%H%M%S)"
+			mv "$path" "$backup"
+			say "moved the existing $path to $backup"
+			echo "previous $(basename "$path") folder moved to $backup" > "$LIVESTATUS.moved"
+		fi
+		sha="$(resolve "$branch")" || return 2
+		G worktree prune
+		mkdir -p "$(dirname "$path")"
+		G worktree add --quiet --detach "$path" "$sha"
+	fi
+	G config --local pi.live.path "$path"
+	G config --local pi.live.branch "$branch"
+	G config --local --unset pi.live.auto 2>/dev/null || true
+}
+
+auto_live() { # ComfyUI node + no live copy yet → create one following test
+	[[ -z "$(cfg pi.live.path)" && "$(cfg pi.live.auto)" != "off" ]] || return 0
+	is_comfy_node || return 0
+	local root target rc=0
+	if ! root="$(comfy_root)"; then
+		echo "ComfyUI node detected, but no ComfyUI install found. Tell the kit where it is: echo /path/to/ComfyUI > $COMFY_CONF" > "$LIVESTATUS"
+		return 0
+	fi
+	target="$root/custom_nodes/$PROJECT_NAME"
+	make_live "$target" "$TESTBR" || rc=$?
+	case "$rc" in
+	0) say "ComfyUI node detected: live copy $target follows $TESTBR" ;;
+	3) echo "ComfyUI node detected, but $target already exists (not managed by the kit). Run pinew in this project to take it over (your folder is moved to $BACKUPS)." > "$LIVESTATUS" ;;
+	*) : ;;
+	esac
+}
+
+do_sync() { # $1 = "wait" to wait for a running sync instead of leaving it a rerun note
+	exec 9>"$COMMON/pi-test-branch.lock"
+	# Wait our turn (a model resolving a conflict can hold the lock for a while); if it takes too
+	# long, leave a note so the running sync goes round once more.
+	if [[ "${1:-}" == "wait" ]]; then flock 9
+	elif ! flock -w 900 9; then touch "$RERUN"; exit 0; fi
+	while :; do
+		rm -f "$RERUN"
+		if (( FETCH )) && has_origin; then G fetch --quiet origin 2>/dev/null || true; fi
+		build
+		auto_live
+		sync_live
+		[[ -e "$RERUN" ]] || break
+		FETCH=0
+	done
+}
+
+case "$CMD" in
+sync) do_sync ;;
+cleanup) cleanup_gone ;;
+rebuild)
+	FETCH=1; REBUILD=1; do_sync wait
+	REBUILD=0
+	echo "test rebuilt from main + current branches"
+	[[ -f "$STATUS" ]] && cat "$STATUS"
+	;;
+status)
+	if [[ -f "$STATUS" ]]; then cat "$STATUS"; else echo "test branch: not built yet"; fi
+	[[ -f "$LIVESTATUS" ]] && cat "$LIVESTATUS"
+	[[ -f "$LIVESTATUS.moved" ]] && cat "$LIVESTATUS.moved"
+	live="$(cfg pi.live.path)"
+	if [[ -n "$live" ]]; then
+		lb="$(cfg pi.live.branch)"; lb="${lb:-$TESTBR}"
+		echo "live copy: $live → follows $lb @ $(GW "$live" log -1 --format='%h %s' 2>/dev/null || echo missing)"
+		r="$(cfg pi.live.restart)"; [[ -n "$r" ]] && echo "live restart: $r"
+	else
+		echo "live copy: none (set one: /live set <path> [branch])"
+	fi
+	;;
+live-set)
+	path="${ARGS[0]:?usage: pi-test-branch live-set <path> [branch]}"; branch="${ARGS[1]:-$TESTBR}"
+	path="${path/#\~/$HOME}"; [[ "$path" = /* ]] || path="$PWD/$path"
+	path="$(realpath -m "$path")"
+	if [[ -e "$path" ]] && ! is_our_worktree "$path" && (( ! ADOPT )); then
+		echo "$path already exists and isn't a live copy of this repo." >&2
+		echo "Run again with --adopt to move it to $BACKUPS and take over." >&2
+		exit 1
+	fi
+	QUIET=1 do_sync wait
+	rc=0; make_live "$path" "$branch" || rc=$?
+	(( rc == 2 )) && { echo "no branch named $branch" >&2; exit 1; }
+	(( rc == 0 )) || exit 1
+	QUIET=1 do_sync wait
+	echo "live copy: $path → follows $branch (updates automatically)"
+	;;
+live-branch)
+	branch="${ARGS[0]:?usage: pi-test-branch live-branch <branch>}"
+	[[ -n "$(cfg pi.live.path)" ]] || { echo "no live copy set (live-set first)" >&2; exit 1; }
+	resolve "$branch" >/dev/null || [[ "$branch" == "$TESTBR" ]] || { echo "no branch named $branch" >&2; exit 1; }
+	G config --local pi.live.branch "$branch"
+	QUIET=1 do_sync wait
+	echo "live copy now follows $branch"
+	;;
+live-restart)
+	if [[ -z "${ARGS[0]:-}" ]]; then G config --local --unset pi.live.restart 2>/dev/null || true; echo "live restart: off"
+	else G config --local pi.live.restart "${ARGS[*]}"; echo "live restart: ${ARGS[*]}"; fi
+	;;
+live-off)
+	G config --local --unset pi.live.path 2>/dev/null || true
+	G config --local --unset pi.live.branch 2>/dev/null || true
+	G config --local pi.live.auto off
+	echo "live copy no longer managed (folder left as is)"
+	;;
+esac

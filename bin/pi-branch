@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+# pi-branch — start a work branch from fresh main and push it (so it reaches `test` right away).
+#
+# Usage: pi-branch <feat|fix|chore|docs>/<slug>
+#   An existing branch of that name is just switched to. Uncommitted edits come along (git refuses
+#   only if they would clash with main).
+set -euo pipefail
+
+name="${1:-}"
+if ! [[ "$name" =~ ^(feat|fix|chore|docs)/[a-z0-9][a-z0-9._-]*$ ]]; then
+	echo "usage: pi-branch <feat|fix|chore|docs>/<lowercase-slug>" >&2
+	exit 2
+fi
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "pi-branch: not inside a git repo" >&2; exit 1; }
+G() { git -C "$root" "$@"; }
+has_origin() { G remote | grep -qx origin; }
+
+if G rev-parse -q --verify "refs/heads/$name" >/dev/null; then
+	G switch -q "$name"
+	echo "on existing branch $name"
+	exit 0
+fi
+
+base="main"
+if has_origin; then
+	G fetch -q origin
+	G rev-parse -q --verify refs/remotes/origin/main >/dev/null && base="origin/main"
+fi
+G rev-parse -q --verify "$base^{commit}" >/dev/null || { echo "pi-branch: no main branch yet" >&2; exit 1; }
+
+G switch -q --no-track -c "$name" "$base"
+if has_origin; then
+	G push -q -u origin "$name"
+	echo "created $name from $base and pushed it"
+else
+	echo "created $name from $base (no GitHub remote yet)"
+fi

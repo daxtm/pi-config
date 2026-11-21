@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# pi-resolve — finish a merge that stopped on conflicts. Used by pi-test-branch (merging into `test`)
+# and pi-ship (merging main into a branch). First git rerere, then the model (headless pi running
+# /resolve-conflict, model = `resolver` in agent-models.conf).
+#
+# Usage: pi-resolve <worktree> <label being merged> <sha being merged> <log file>
+# Exit 0 = the merge is committed cleanly in <worktree>. Exit 1 = not resolved (merge left in progress;
+# the caller aborts it).
+set -euo pipefail
+export PI_TEST_BRANCH=1   # our git operations must not re-trigger the kit's hooks
+
+dir="${1:?worktree}"; label="${2:?label}"; sha="${3:?sha}"; log="${4:?log file}"
+KIT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+GW() { git -C "$dir" -c core.hooksPath=/dev/null "$@"; }
+
+merge_done() {
+	[[ -z "$(GW diff --name-only --diff-filter=U)" ]] || return 1
+	! GW rev-parse -q --verify MERGE_HEAD >/dev/null 2>&1 || return 1
+	[[ "$(GW rev-parse -q --verify HEAD^2 2>/dev/null)" == "$sha" ]] || return 1
+	[[ -z "$(GW status --porcelain --untracked-files=no)" ]] || return 1
+	! GW grep -qE '^(<{7}|>{7})( |$)' HEAD -- . 2>/dev/null
+}
+
+# 1. git rerere already knew the resolution
+if [[ -z "$(GW diff --name-only --diff-filter=U)" ]]; then
+	GW commit --quiet --no-edit >/dev/null 2>&1 || true
+	merge_done && exit 0
+fi
+
+# 2. the model
+command -v pi >/dev/null 2>&1 || { echo "pi-resolve: pi not on PATH" >&2; exit 1; }
+model="$(grep -E '^[[:space:]]*resolver[[:space:]]*=' "$KIT_DIR/agent-models.conf" 2>/dev/null | tail -n1 | cut -d= -f2- \
+	| sed -E 's/#.*$//; s/^[[:space:]]+//; s/[[:space:]]+$//' || true)"
+into="$(GW branch --show-current 2>/dev/null || true)"; into="${into:-the branch being built}"
+{
+	echo "=== $(date '+%F %T') resolving $label (${sha:0:7}) into $into in $dir"
+	(cd "$dir" && timeout 1800 pi -p --no-session ${model:+--model "$model"} "/resolve-conflict $label" </dev/null 9>&-) \
+		|| echo "(pi exited non-zero)"
+} >> "$log" 2>&1
+merge_done

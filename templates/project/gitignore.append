@@ -1,0 +1,8 @@
+# --- pi-workflow-kit ---
+.env
+.env.*
+!.env.example
+.pi/npm/
+.pi/git/
+*.log
+.DS_Store

@@ -1,0 +1,154 @@
+#!/usr/bin/env bash
+# pi-ship — ship one branch: bring it up to date with main, check and archive its OpenSpec change,
+# push, and open (or update) its PR to main. You merge the PR on GitHub once CI is green.
+# No model is involved, except when main conflicts with the branch (then bin/pi-resolve).
+#
+# Usage: pi-ship [branch]      default: the current branch
+#
+# Refuses (and says what to do) when: the branch is main/master/test, has uncommitted changes,
+# has unchecked tasks, its OpenSpec change doesn't validate, or it's a feat/ branch without a change.
+# Everything happens in a throwaway worktree; your folder only gets a fast-forward at the end.
+set -euo pipefail
+
+KIT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+OPENSPEC_BIN=""
+# shellcheck disable=SC1091
+[[ -f "$KIT_DIR/.kit-paths" ]] && . "$KIT_DIR/.kit-paths"
+[[ -n "$OPENSPEC_BIN" && -x "$OPENSPEC_BIN" ]] || OPENSPEC_BIN="$(command -v openspec || true)"
+export OPENSPEC_TELEMETRY=0
+
+die() { echo "ship: $*" >&2; exit 1; }
+say() { echo "ship: $*"; }
+
+root="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repo"
+G() { git -C "$root" -c core.hooksPath=/dev/null "$@"; }
+COMMON="$(G rev-parse --path-format=absolute --git-common-dir)"
+
+branch="${1:-$(G branch --show-current)}"
+[[ -n "$branch" ]] || die "you're not on a branch — name one: /ship <branch>"
+[[ "$branch" =~ ^(main|master|test)$ ]] && die "$branch is never shipped — ship the feature branch instead"
+G rev-parse -q --verify "refs/heads/$branch" >/dev/null || die "no local branch named $branch"
+G remote | grep -qx origin || die "no GitHub remote — run: pi-gh-setup (or pinew) in this project"
+command -v gh >/dev/null && gh auth status >/dev/null 2>&1 || die "gh isn't logged in — run: gh auth login"
+
+# Where the branch is checked out (if anywhere), and is it clean?
+checkout=""
+while read -r line; do
+	case "$line" in
+	"worktree "*) wt="${line#worktree }" ;;
+	"branch refs/heads/$branch") checkout="$wt" ;;
+	esac
+done < <(G worktree list --porcelain)
+if [[ -n "$checkout" && -n "$(git -C "$checkout" status --porcelain --untracked-files=no)" ]]; then
+	die "uncommitted changes on $branch in $checkout — commit them first (ask pi, or /commit)"
+fi
+
+G fetch -q --prune origin
+base="refs/remotes/origin/main"
+G rev-parse -q --verify "$base" >/dev/null || die "GitHub has no main branch yet"
+local_tip="$(G rev-parse "refs/heads/$branch")"
+tip="$local_tip"
+remote_tip="$(G rev-parse -q --verify "refs/remotes/origin/$branch" || true)"
+if [[ -n "$remote_tip" && "$remote_tip" != "$local_tip" ]]; then
+	if G merge-base --is-ancestor "$local_tip" "$remote_tip"; then tip="$remote_tip"
+	elif ! G merge-base --is-ancestor "$remote_tip" "$local_tip"; then
+		die "your $branch and GitHub's $branch have diverged — ask pi to reconcile them, then /ship again"
+	fi
+fi
+G merge-base --is-ancestor "$tip" "$base" && die "$branch has nothing that isn't already in main"
+
+TMPD="$(mktemp -d)"
+cleanup() { G worktree remove --force "$TMPD/wt" >/dev/null 2>&1 || true; rm -rf "$TMPD"; G worktree prune >/dev/null 2>&1 || true; }
+trap cleanup EXIT
+G worktree add -q --detach "$TMPD/wt" "$tip"
+W() { git -C "$TMPD/wt" -c core.hooksPath=/dev/null "$@"; }
+
+# 1. Up to date with main (conflicts go to the model)
+if ! W merge-base --is-ancestor "$base" HEAD; then
+	say "merging the latest main into $branch"
+	G config --local rerere.enabled true
+	G config --local rerere.autoupdate true
+	if ! W merge -q --no-ff --no-edit -m "Merge main into $branch" "$base" >/dev/null 2>&1; then
+		say "main conflicts with $branch — the model is resolving it (can take a few minutes)"
+		if ! "$KIT_DIR/bin/pi-resolve" "$TMPD/wt" main "$(G rev-parse "$base")" "$COMMON/pi-ship-resolve.log"; then
+			W merge --abort >/dev/null 2>&1 || true
+			die "couldn't resolve the conflict with main (log: $COMMON/pi-ship-resolve.log) — nothing was pushed"
+		fi
+	fi
+fi
+
+# 2. OpenSpec: the changes this branch adds or edits must be finished, valid, then archived
+mapfile -t ids < <(W diff --name-only "$base" HEAD -- openspec/changes \
+	| awk -F/ '$3 != "archive" && NF >= 4 { print $3 }' | sort -u)
+active=()
+for id in "${ids[@]}"; do [[ -d "$TMPD/wt/openspec/changes/$id" ]] && active+=("$id"); done
+archived_here="$(W diff --name-only --diff-filter=A "$base" HEAD -- openspec/changes/archive | head -n1)"
+
+if [[ "$branch" == feat/* && ${#active[@]} -eq 0 && -z "$archived_here" ]]; then
+	die "feat/ branches need an OpenSpec change — run /propose first (fix/, chore/ and docs/ branches don't)"
+fi
+if (( ${#active[@]} )); then
+	[[ -n "$OPENSPEC_BIN" ]] || die "openspec not found — run: pikit apply"
+fi
+for id in "${active[@]}"; do
+	tasks="$TMPD/wt/openspec/changes/$id/tasks.md"
+	[[ -f "$tasks" ]] || die "change $id has no tasks.md"
+	open="$(grep -nE '^[[:space:]]*-[[:space:]]+\[[[:space:]]\]' "$tasks" || true)"
+	if [[ -n "$open" ]]; then
+		echo "ship: change $id still has unchecked tasks:" >&2
+		sed 's/^/  line /' <<<"$open" >&2
+		die "finish them (/apply), then /ship again"
+	fi
+	grep -qE '^[[:space:]]*-[[:space:]]+\[[xX]\]' "$tasks" || die "change $id has no tasks at all"
+	(cd "$TMPD/wt" && "$OPENSPEC_BIN" validate "$id" --type change --no-interactive >/dev/null 2>"$TMPD/validate.err") \
+		|| { cat "$TMPD/validate.err" >&2; die "change $id doesn't validate — ask pi to fix the spec"; }
+	(cd "$TMPD/wt" && "$OPENSPEC_BIN" archive "$id" -y >/dev/null) || die "openspec archive $id failed"
+	[[ ! -d "$TMPD/wt/openspec/changes/$id" ]] || die "openspec archive $id didn't move the change — nothing was pushed"
+	W add -A openspec
+	W commit -q -m "chore(openspec): archive $id" -m "Refs: openspec/changes/$id"
+	say "archived OpenSpec change $id"
+done
+
+# 3. Push (normal push, never forced) and move your local branch along
+new="$(W rev-parse HEAD)"
+if [[ "$new" != "$remote_tip" ]]; then
+	G push -q origin "$new:refs/heads/$branch" || die "push to GitHub was rejected — try /ship again"
+fi
+if [[ "$new" != "$local_tip" ]]; then
+	if [[ -n "$checkout" ]]; then git -C "$checkout" merge -q --ff-only "$new"
+	else G update-ref "refs/heads/$branch" "$new" "$local_tip"; fi
+fi
+G branch -q --set-upstream-to="origin/$branch" "$branch" 2>/dev/null || true
+
+# 4. The PR (you merge it)
+url="$(cd "$root" && gh pr list --head "$branch" --base main --state open --json url -q '.[0].url' 2>/dev/null || true)"
+if [[ -n "$url" ]]; then
+	say "PR updated: $url"
+else
+	body="$TMPD/pr.md"
+	{
+		for prop in "$TMPD"/wt/openspec/changes/archive/*/proposal.md; do
+			[[ -f "$prop" ]] || continue
+			d="$(basename "$(dirname "$prop")")"
+			W diff --quiet "$base" HEAD -- "openspec/changes/archive/$d" && continue   # not from this branch
+			echo "## ${d#????-??-??-}"
+			awk '/^## /{keep = ($0 ~ /^## (Why|What Changes)/)} keep { sub(/^## /, "### "); print }' "$prop"
+			echo
+		done
+		echo "## Commits"
+		W log --no-merges --format='- %s' "$base..HEAD"
+		mapfile -t adrs < <(W diff --name-only --diff-filter=A "$base" HEAD -- docs/adr | grep -E '/[0-9]{4}-' || true)
+		if (( ${#adrs[@]} )); then echo; echo "## Decisions"; printf -- '- `%s`\n' "${adrs[@]}"; fi
+		echo
+		echo "---"
+		echo "CI (\`check\`) runs \`scripts/check.sh\` and the OpenSpec checks. Merge with **Create a merge commit** once it's green; deleting the branch afterwards is up to you."
+	} > "$body"
+	type="${branch%%/*}"; slug="${branch#*/}"
+	url="$(cd "$root" && gh pr create --base main --head "$branch" --title "$type: ${slug//-/ }" --body-file "$body")" \
+		|| die "gh pr create failed"
+	say "PR opened: $url"
+fi
+
+# `test` picks up the archive commit in the background
+[[ -x "$KIT_DIR/bin/pi-test-branch" ]] && ( "$KIT_DIR/bin/pi-test-branch" --repo "$root" --quiet >/dev/null 2>&1 & )
+exit 0

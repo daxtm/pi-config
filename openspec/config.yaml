@@ -1,0 +1,24 @@
+schema: spec-driven
+
+context: |
+  Project: the user's Pi coding-agent setup (pi-config): install script, workflow scripts, Pi
+  extensions, prompts/agents, and the templates every new project gets.
+  Stack: bash, TypeScript Pi extensions (@earendil-works/pi-coding-agent), Markdown, OpenSpec.
+  Runs on: the user's Linux PC (zsh), deployed from main into ~/.pi/agent by pikit.
+  Constraints: workflow logic lives in scripts, not prompts (ADR-0002); prompt sizes are capped by
+  budgets.conf; extensions must never throw at load.
+  The owner reviews behavior and output rather than code: plain language, observable results.
+
+rules:
+  proposal:
+    - Under 300 words, plain language; "Why" is at least two full sentences
+    - State what is out of scope
+    - Say how the owner will see it work (a command to run and the output to expect)
+  specs:
+    - A new capability's delta spec starts with "## Purpose" — one sentence of at least 60 characters
+    - Every requirement has a WHEN/THEN scenario a test can check
+  design:
+    - Anything costly to reverse gets an ADR in docs/adr/
+  tasks:
+    - Each task is one small commit; at most ~8 tasks
+    - The last task makes scripts/check.sh cover the new behavior and pass

@@ -1,0 +1,109 @@
+#!/usr/bin/env bash
+# pikit — your Pi config is the project ~/workspace/projects/pi-config. pikit deploys it.
+#
+#   Dev repo:  ~/workspace/projects/pi-config   (work on it like any project: /propose, /apply, /ship)
+#   Deployed:  ~/.local/share/pi-config         (a checkout of the branch you follow — main by default —
+#                                                whose install.sh writes ~/.pi/agent)
+#
+# Only what you MERGED reaches your pi (main), so a half-built change can't break the tool you'd use
+# to fix it. To try a branch before merging: `pikit use feat/x`; back: `pikit use main`. When a
+# followed branch is merged and deleted, pikit goes back to main by itself.
+#
+# Usage:
+#   pikit status                 what's deployed, whether an update is waiting, files pi-config doesn't own
+#   pikit apply [--if-changed]   fetch and deploy the followed branch (pi does this at startup)
+#   pikit use <branch>           follow another branch (main, feat/x, test …) and deploy it now
+#   pikit path                   print the dev repo folder
+#
+# Break-glass (pikit itself broken): git -C ~/.local/share/pi-config checkout --detach origin/main && ~/.local/share/pi-config/install.sh
+set -euo pipefail
+
+DEV="$HOME/workspace/projects/pi-config"
+DEPLOY="$HOME/.local/share/pi-config"
+AGENT_DIR="${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
+LOGDIR="$HOME/.local/share/pi-kit"
+LOG="$LOGDIR/deploy.log"
+QUIET=0; IF_CHANGED=0
+
+die() { echo "pikit: $*" >&2; exit 1; }
+say() { (( QUIET )) || echo "$*"; }
+D() { git -C "$DEV" -c core.hooksPath=/dev/null "$@"; }
+
+[[ -d "$DEV/.git" ]] || die "no dev repo at $DEV (run the pi-config v2 setup script)"
+[[ -d "$DEPLOY" ]] || die "no deployed copy at $DEPLOY (run the pi-config v2 setup script)"
+
+followed() { D config --local --get pikit.branch 2>/dev/null || echo main; }
+
+target_of() { # branch -> sha to deploy (GitHub's copy if it's newer), empty if the branch is gone
+	local b="$1" l="" r=""
+	l="$(D rev-parse -q --verify "refs/heads/$b" 2>/dev/null || true)"
+	r="$(D rev-parse -q --verify "refs/remotes/origin/$b" 2>/dev/null || true)"
+	if [[ "$b" =~ ^(main|master)$ ]]; then [[ -n "$r" ]] && { echo "$r"; return; }; echo "$l"; return; fi
+	if [[ -n "$l" && -n "$r" ]]; then
+		if D merge-base --is-ancestor "$l" "$r"; then echo "$r"; else echo "$l"; fi
+	else echo "${r:-$l}"; fi
+}
+
+deploy() {
+	local b want have
+	D fetch -q --prune origin 2>/dev/null || say "pikit: couldn't reach GitHub — using what's local"
+	b="$(followed)"
+	want="$(target_of "$b")"
+	if [[ -n "$want" && "$b" != main ]] && ! D rev-parse -q --verify "refs/remotes/origin/$b" >/dev/null \
+		&& D rev-parse -q --verify refs/remotes/origin/main >/dev/null && D merge-base --is-ancestor "$want" refs/remotes/origin/main; then
+		want=""   # merged on GitHub (and deleted there) — main has it now
+	fi
+	if [[ -z "$want" ]]; then
+		echo "pikit: branch $b is gone (merged?) — following main again"
+		D config --local --unset pikit.branch || true
+		b=main; want="$(target_of main)"
+	fi
+	[[ -n "$want" ]] || die "nothing to deploy (no main branch)"
+	have="$(git -C "$DEPLOY" rev-parse HEAD 2>/dev/null || true)"
+	if (( IF_CHANGED )) && [[ "$want" == "$have" ]]; then return 0; fi
+	if [[ -n "$(git -C "$DEPLOY" status --porcelain --untracked-files=no)" ]]; then
+		die "files were edited in $DEPLOY — never edit the deployed copy. Reset it: git -C $DEPLOY checkout -- . && pikit apply"
+	fi
+	git -C "$DEPLOY" -c core.hooksPath=/dev/null checkout -q --detach "$want"
+	mkdir -p "$LOGDIR"
+	echo "=== $(date '+%F %T') deploying $b @ ${want:0:7}" >> "$LOG"
+	if PIKIT_DEPLOYING=1 flock "$LOGDIR/deploy.lock" "$DEPLOY/install.sh" >> "$LOG" 2>&1; then
+		echo "pi-config: deployed $b @ $(git -C "$DEPLOY" log -1 --format='%h %s') — /reload (or a new pi session) to use it"
+	else
+		die "install.sh failed for $b @ ${want:0:7} (log: $LOG). Go back: pikit use main"
+	fi
+}
+
+cmd="${1:-status}"; shift || true
+for a in "$@"; do case "$a" in --quiet) QUIET=1 ;; --if-changed) IF_CHANGED=1 ;; esac; done
+
+case "$cmd" in
+-h|--help|help) sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+path) echo "$DEV" ;;
+apply) deploy ;;
+use)
+	b="${1:?usage: pikit use <branch>}"
+	[[ -n "$(target_of "$b")" ]] || { D fetch -q origin 2>/dev/null || true; [[ -n "$(target_of "$b")" ]] || die "no branch named $b"; }
+	if [[ "$b" == main ]]; then D config --local --unset pikit.branch || true; else D config --local pikit.branch "$b"; fi
+	deploy
+	;;
+status)
+	D fetch -q --prune origin 2>/dev/null || true
+	b="$(followed)"; want="$(target_of "$b")"; have="$(git -C "$DEPLOY" rev-parse HEAD)"
+	echo "dev repo:  $DEV  (on $(D branch --show-current || echo '?'))"
+	echo "deployed:  $DEPLOY → follows $b @ $(git -C "$DEPLOY" log -1 --format='%h %s')"
+	if [[ -z "$want" ]]; then echo "           $b no longer exists — pikit apply goes back to main"
+	elif [[ "$want" != "$have" ]]; then echo "           update waiting: ${want:0:7} — run: pikit apply"
+	else echo "           up to date"; fi
+	if [[ -f "$AGENT_DIR/.kit-manifest" ]]; then
+		mapfile -t extra < <(for d in agents prompts skills extensions; do
+			[[ -d "$AGENT_DIR/$d" ]] && find "$AGENT_DIR/$d" -type f -not -path '*/node_modules/*' -printf "$d/%P\n"
+		done | sort | grep -vxF -f "$AGENT_DIR/.kit-manifest" || true)
+		if (( ${#extra[@]} )); then
+			echo; echo "In $AGENT_DIR but not from pi-config (add them to pi-config/global/user/ to keep them managed):"
+			printf '  %s\n' "${extra[@]}"
+		fi
+	fi
+	;;
+*) die "unknown command: $cmd (pikit help)" ;;
+esac
