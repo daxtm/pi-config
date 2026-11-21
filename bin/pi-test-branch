@@ -223,6 +223,19 @@ push_branches() { # local feature branches ahead of GitHub → push (never main/
 REBUILD=0
 build() {
 	local base base_sha start old="" b sha
+	# Check before moving the shared branch ref: otherwise a clean checkout appears dirty
+	# merely because its HEAD moved while its index still describes the old commit.
+	local wt="" line
+	while IFS= read -r line; do
+		case "$line" in
+		"worktree "*) wt="${line#worktree }" ;;
+		"branch refs/heads/$TESTBR")
+			if tracked_dirty "$wt"; then
+				echo "test branch NOT updated: $wt has edits — commit or stash them first" > "$STATUS"
+				say "$(cat "$STATUS")"; return 1
+			fi ;;
+		esac
+	done < <(G worktree list --porcelain)
 	base="$(base_ref)" || { say "no main branch yet — nothing to build"; return 0; }
 	base_sha="$(G rev-parse "$base")"
 
@@ -300,6 +313,7 @@ build() {
 	local new; new="$(GW "$tmp/wt" rev-parse HEAD)"
 	cleanup
 
+	follow_worktrees "$new"
 	G update-ref -m "pi-test-branch" "refs/heads/$TESTBR" "$new"
 	G config --local pi.testbranch.managed true
 	{
@@ -311,7 +325,6 @@ build() {
 		[[ -f "$STATUS.tmp" ]] && cat "$STATUS.tmp"
 	} > "$STATUS"
 	rm -f "$STATUS.tmp"
-	follow_worktrees "$new"
 	if (( REBUILD )); then
 		if has_origin; then
 			G push --quiet --force-with-lease="refs/heads/$TESTBR:${remote_sha:-}" origin "refs/heads/$TESTBR:refs/heads/$TESTBR" 2>/dev/null \

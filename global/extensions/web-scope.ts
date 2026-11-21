@@ -2,9 +2,9 @@
  * web-scope — keeps the Exa / Tavily / Firecrawl MCP tools out of the
  * interactive main session so their schemas don't cost tokens on every turn.
  *
- * Subagents (spawned in JSON/print mode by the subagent extension) are not
- * touched: their `tools:` frontmatter decides what they get, so only the
- * researcher agent sees the web tools.
+ * Headless agents keep web tools only when their --tools explicitly names them.
+ * Pi otherwise retains MCP tools even with a built-in-tool allowlist. The
+ * researcher opts in through its tools frontmatter.
  *
  * /web        show status
  * /web on     expose web tools to the main session (this process only)
@@ -21,8 +21,10 @@ export default function (pi: ExtensionAPI) {
 	let mainSessionWeb = false;
 
 	pi.on("before_agent_start", (event, ctx) => {
-		// Only the interactive main session (TUI or RPC). Subagents run in json/print mode.
-		if (!ctx.hasUI || mainSessionWeb) return;
+		// UI sessions opt in via /web; headless agents opt in through an explicit tool list.
+		const index = process.argv.findIndex((arg) => arg === "--tools" || arg === "-t");
+		const explicitWeb = index >= 0 && (process.argv[index + 1] ?? "").split(",").some(isWebTool);
+		if (ctx.hasUI ? mainSessionWeb : explicitWeb) return;
 		const opts = event.systemPromptOptions as { selectedTools?: string[] } | undefined;
 		const selected = opts?.selectedTools;
 		if (!Array.isArray(selected) || !selected.some(isWebTool)) return;

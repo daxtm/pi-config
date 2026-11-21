@@ -38,3 +38,25 @@ The existing pikit command SHALL skip unchanged installation only after successf
 #### Scenario: Installation failed after checkout
 - **WHEN** apply --if-changed runs again after an installation failure
 - **THEN** it retries installation at the same commit
+
+### Requirement: Checked-out test preserves user edits
+The existing sync and rebuild commands SHALL update a clean test checkout and refuse to move its branch when tracked user edits exist.
+
+#### Scenario: Clean test checkout follows rebuild
+- **WHEN** rebuild removes abandoned work and test has a clean checkout
+- **THEN** the checkout files match the rebuilt test tip
+
+#### Scenario: Edited test checkout
+- **WHEN** rebuild finds tracked user edits in a test checkout
+- **THEN** it fails without moving test or discarding those edits
+
+### Requirement: Web tools follow agent scope
+The existing web-scope extension SHALL hide web tool declarations from headless agents unless their explicit tool list opts in.
+
+#### Scenario: Builder has a built-in-only tool list
+- **WHEN** a headless build agent starts with read and write tools
+- **THEN** web tools are removed and its read and write tools remain
+
+#### Scenario: Researcher opts in
+- **WHEN** a headless researcher explicitly lists web tools
+- **THEN** those web tools remain available

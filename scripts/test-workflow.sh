@@ -194,13 +194,20 @@ cd "$R" || exit 1
 echo base > base; git add base; git commit -q -m base; git push -q -u origin main 2>/dev/null
 git switch -q -c fix/abandoned; echo abandoned > abandoned; git add abandoned; git commit -q -m abandoned
 sync; pi-test-branch live-set "$T/rebuild-live" >/dev/null 2>&1
+git worktree add -q "$T/rebuild-test-checkout" test
 git switch -q main; git branch -q -D fix/abandoned
 # Remove the branch remotely, as an owner would; rebuild fetches/prunes before syncing.
 git -C "$GH/repos/rebuild.git" branch -q -D fix/abandoned
+old_test="$(git rev-parse test)"; echo 'user edit' > "$T/rebuild-test-checkout/base"
+check "rebuild refuses a test checkout with tracked edits" bash -c '! pi-test-branch rebuild'
+check "refusal preserves the test branch tip" test "$(git rev-parse test)" = "$old_test"
+check "refusal preserves user edits" grep -qx 'user edit' "$T/rebuild-test-checkout/base"
+git -C "$T/rebuild-test-checkout" restore base
 pi-test-branch rebuild > "$LOG/rebuild.txt" 2>&1
 check "rebuild with nothing eligible resets local test to main" test "$(git rev-parse test)" = "$(git rev-parse main)"
 check "rebuild with nothing eligible resets remote test to main" test "$(git -C "$GH/repos/rebuild.git" rev-parse test)" = "$(git rev-parse main)"
 check "rebuild updates the live worktree" test ! -e "$T/rebuild-live/abandoned"
+check "rebuild updates a clean checkout of test" test ! -e "$T/rebuild-test-checkout/abandoned"
 
 # --no-github must not create remote main, call gh or push any branch.
 git init -q --bare -b legacy "$GH/repos/offline.git"; echo PUBLIC > "$GH/repos/offline.git.vis"
@@ -235,11 +242,23 @@ check "pikit skips a successfully installed unchanged SHA" test "$(wc -l < "$H/i
 echo "guards"
 ESBUILD=(npx -y esbuild@0.28.2)
 command -v esbuild >/dev/null && ESBUILD=(esbuild)
+"${ESBUILD[@]}" "$ROOT/global/extensions/web-scope.ts" --bundle --platform=node --format=cjs --outfile="$T/web-scope.cjs" --log-level=error
 if "${ESBUILD[@]}" "$ROOT/global/extensions/pr-only.ts" --bundle --platform=node \
 	--format=cjs --external:@earendil-works/pi-coding-agent --outfile="$T/pr-only.cjs" --log-level=error >/dev/null 2>&1; then
 	cat > "$T/guard.cjs" <<'EOF'
 const ext = require(process.argv[2]).default; let h; let branch = "feat/x";
 ext({ on: (e, f) => { if (e === "tool_call") h = f; }, exec: async (c, a) => ({ code: 0, stdout: a[0] === "branch" ? branch : "abc" }) });
+const web = require(process.argv[3]).default; let filter;
+web({on: (_, f) => {filter = f;}, registerCommand: () => {}});
+const saved = process.argv;
+for (const [ui, allow] of [[true, "read"], [false, "read,write"], [false, "read,mcp__exa__web_search_exa"]]) {
+  process.argv = ["node", "pi", "--tools", allow];
+  const opts = {selectedTools: ["read", "mcp__exa__web_search_exa"]};
+  filter({systemPromptOptions: opts}, {hasUI: ui});
+  const wantWeb = !ui && allow.includes("mcp__exa__");
+  if (opts.selectedTools.includes("mcp__exa__web_search_exa") !== wantWeb || !opts.selectedTools.includes("read")) throw Error("web-scope role isolation failed");
+}
+process.argv = saved;
 const home = require("os").homedir(); const dev = `${home}/workspace/projects/pi-config/global/MAIN.md`;
 const cases = [
   [true, "bash", "gh pr merge 3 --merge", true], [true, "bash", "gh repo delete o/r --yes", true],
@@ -255,7 +274,7 @@ const cases = [
     if (!!(r && r.block) !== want) { bad++; console.log(`guard wrong: ${tool} ${JSON.stringify(inp)} ui=${ui}`); }
   } process.exit(bad ? 1 : 0); })();
 EOF
-	if node "$T/guard.cjs" "$T/pr-only.cjs" > "$LOG/guard.txt" 2>&1; then pass "pr-only blocks merges, deletes, main/test pushes, main-session pi-config edits; allows normal work"
+	if node "$T/guard.cjs" "$T/pr-only.cjs" "$T/web-scope.cjs" > "$LOG/guard.txt" 2>&1; then pass "guards block prohibited operations and isolate web tools by role"
 	else fail "pr-only guard: $(head -n3 "$LOG/guard.txt" | tr '\n' ' ')"; fi
 else
 	fail "pr-only guard could not compile (esbuild is required)"
