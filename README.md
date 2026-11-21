@@ -37,14 +37,8 @@ CI (`.github/workflows/ci.yml`, job `check`), a **public** GitHub repo named lik
 (PR + green `check` required, no force-push/deletion) and test (no deletion).
 Repos are public because **GitHub Free enforces rulesets on public repos only** — that's what makes
 "PR + green CI before merge" a hard rule instead of a habit. Never commit secrets (anyone can read the
-repo). `--private` exists, but then main is unprotected and pi-gh-setup warns about it. Re-run `pinew` in an existing project to
-bring it up to date (the changes arrive as a PR).
-
-## Existing repos: `pi-takeover [repo-dir]`
-One-time bootstrap (ADR-0004) for a GitHub repo that has neither remote `main` nor `test`: it pushes
-both branches at the current HEAD (creation-only — it refuses if either branch already exists, and
-never updates existing refs, the checkout, or local branches), then runs `pi-gh-setup` on it. Next
-step afterwards: `pi-branch chore/repo-baseline`.
+repo). `--private` exists, but then main is unprotected and pi-gh-setup warns about it. Run `pinew` inside an existing project to set it up or take it over, whatever state it's in (no
+`main` yet, a different default branch, or already set up): the changes arrive as a PR.
 
 ## Changing this setup
 This repo is a normal project: `/propose`, `/apply`, `/ship`, merge. `pikit` deploys what's on

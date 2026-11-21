@@ -10,5 +10,6 @@ except to mark it superseded by a newer ADR.
 | [0001](0001-record-architecture-decisions.md) | Record architecture decisions | Accepted | 2026-11-21 |
 | [0002](0002-workflow-in-scripts-not-prompts.md) | Workflow in scripts, not prompts | Accepted | 2026-11-21 |
 | [0003](0003-public-repos-by-default.md) | Public repos by default | Accepted | 2026-11-21 |
-| [0004](0004-script-owned-repository-takeover.md) | Script-owned repository takeover | Accepted | 2026-11-21 |
+| [0004](0004-script-owned-repository-takeover.md) | Script-owned repository takeover | Superseded by 0006 | 2026-11-21 |
 | [0005](0005-explicit-research-scope.md) | Explicit research scope | Accepted | 2026-11-21 |
+| [0006](0006-takeover-is-part-of-pinew.md) | Taking over a repo is part of `pinew` | Accepted | 2026-11-21 |
