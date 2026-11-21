@@ -107,6 +107,9 @@ git clone -q "$GH/repos/legacy.git" "$T/seed" 2>/dev/null
 (cd "$T/seed" && echo "old work" > notes.txt && git add -A && git commit -q -m "old work" && git push -q origin chore/repo-baseline 2>/dev/null)
 git clone -q "$GH/repos/legacy.git" "$P/legacy" 2>/dev/null
 base_sha="$(git -C "$P/legacy" rev-parse HEAD)"
+git -C "$P/legacy" switch -q -c main
+git -C "$P/legacy" commit -q --allow-empty -m 'local-only work'
+git -C "$P/legacy" switch -q chore/repo-baseline
 (cd "$P/legacy" && pinew > "$LOG/pinew-takeover.txt" 2>&1)
 check "takeover: main created on GitHub from the old default branch" test "$(git -C "$GH/repos/legacy.git" rev-parse main 2>/dev/null)" = "$base_sha"
 check "takeover: old branch untouched" test "$(git -C "$GH/repos/legacy.git" rev-parse chore/repo-baseline)" = "$base_sha"
@@ -126,7 +129,7 @@ pi-branch feat/add-hello >/dev/null 2>&1
 mkdir -p openspec/changes/add-hello/specs/hello bin
 printf '## Why\nThe demo needs a visible first feature so the owner can see the workflow end to end.\n\n## What Changes\n- Add bin/hello.\n' > openspec/changes/add-hello/proposal.md
 printf '## Purpose\nPrint a friendly greeting so the owner can see the project running.\n\n## ADDED Requirements\n\n### Requirement: Greeting\nThe system SHALL print hello.\n\n#### Scenario: Run it\n- **WHEN** the user runs bin/hello\n- **THEN** it prints hello\n' > openspec/changes/add-hello/specs/hello/spec.md
-printf -- '- [ ] 1.1 Add bin/hello\n' > openspec/changes/add-hello/tasks.md
+printf -- '- [ ] 1.1 Add bin/hello ([x] is the done marker)\n' > openspec/changes/add-hello/tasks.md
 git add -A && git commit -q -m "docs(openspec): propose add-hello"; sync
 check "feature branch pushed to GitHub without anyone pushing" test "$(git rev-parse feat/add-hello)" = "$(git -C "$GH/repos/demo.git" rev-parse feat/add-hello 2>/dev/null)"
 check "unfinished feature kept out of test" bash -c "! git merge-base --is-ancestor feat/add-hello test"
@@ -161,7 +164,7 @@ check "cleanup keeps a merged branch you kept on GitHub" git rev-parse -q --veri
 check "cleanup never touches a never-pushed branch" git rev-parse -q --verify refs/heads/local-wip
 git branch -q feat/gone origin/main; git push -q -u origin feat/gone 2>/dev/null; git switch -q feat/gone; echo pending > pending; git add pending; git commit -q -m pending; git switch -q main
 git -C "$GH/repos/demo.git" branch -q -D feat/gone
-sync --fetch
+sync
 check "a branch you deleted on GitHub is never pushed back" bash -c "! git -C '$GH/repos/demo.git' rev-parse -q --verify refs/heads/feat/gone"
 check "test contains everything merged to main" git merge-base --is-ancestor origin/main test
 
@@ -232,12 +235,71 @@ echo attempt >> "$HOME/install-attempts"
 EOF
 git -C "$K" add install.sh; git -C "$K" commit -q -m 'installer retry fixture'; git -C "$K" push -q -u origin chore/retry 2>/dev/null
 check "pikit reports an installation failure" bash -c "! '$ROOT/bin/pikit' use chore/retry"
+check "status reports a failed install at the current checkout" grep -q 'installation pending' <<<"$("$ROOT/bin/pikit" status)"
 touch "$H/allow-install"
 "$ROOT/bin/pikit" apply --if-changed --quiet > "$LOG/pikit-retry.txt" 2>&1
 check "pikit retries a failed installation at the same SHA" test "$(wc -l < "$H/install-attempts")" = 2
 "$ROOT/bin/pikit" apply --if-changed --quiet >/dev/null 2>&1
 check "pikit skips a successfully installed unchanged SHA" test "$(wc -l < "$H/install-attempts")" = 2
 
+# Local projects on master, without any GitHub repo yet, must publish the setup.
+L="$P/local-first"; git init -q -b master "$L"
+git -C "$L" commit --allow-empty -qm base
+(cd "$L" && pinew > "$LOG/local-first" 2>&1)
+check "first publication includes setup on remote main" git -C "$GH/repos/local-first.git" cat-file -e main:scripts/check.sh
+check "first publication retains local master" git -C "$L" rev-parse --verify master
+check "local-only legacy setup creates usable main and test" git -C "$P/offline" rev-parse --verify test
+(cd "$P/offline" && pi-branch feat/offline > "$LOG/branch-offline" 2>&1)
+check "offline proposal can start a feature branch" test "$(git -C "$P/offline" branch --show-current)" = feat/offline
+check "offline feature inherits the locally installed project checks" git -C "$P/offline" cat-file -e HEAD:scripts/check.sh
+check "offline proposal leaves remote refs unchanged" test "$(git -C "$GH/repos/offline.git" show-ref)" = "$before_refs"
+
+# Only workflow branches enter test. Git must refuse to overwrite a user's untracked file.
+cd "$R" || exit 1
+git switch -q -c scratch/experiment main
+echo experiment > experiment; git add experiment; git commit -qm experiment; sync
+check "scratch branches stay out of test" bash -c '! git merge-base --is-ancestor scratch/experiment test'
+git switch -q -c fix/collision main
+echo feature > collision; git add collision; git commit -qm collision
+echo personal > "$T/rebuild-test-checkout/collision"
+old_test="$(git rev-parse test)"
+check "sync refuses to overwrite an untracked test checkout file" bash -c '! pi-test-branch'
+check "untracked checkout file survives sync" grep -qx personal "$T/rebuild-test-checkout/collision"
+check "collision leaves test at its old tip" test "$(git rev-parse test)" = "$old_test"
+rm -f "$T/rebuild-test-checkout/collision"
+sync
+check "sync recovers after the collision is cleared" git merge-base --is-ancestor fix/collision test
+
+# A rejected remote rebuild must return failure; retrying should publish the rebuilt tip.
+printf '#!/bin/sh\nexit 1\n' > "$GH/repos/rebuild.git/hooks/pre-receive"
+chmod +x "$GH/repos/rebuild.git/hooks/pre-receive"
+git switch -q main; git branch -q -D fix/collision; git -C "$GH/repos/rebuild.git" branch -q -D fix/collision
+check "rebuild reports a remote push rejection" bash -c '! pi-test-branch rebuild'
+rm "$GH/repos/rebuild.git/hooks/pre-receive"
+pi-test-branch rebuild >/dev/null 2>&1
+check "retry publishes the intended rebuild" test "$(git -C "$GH/repos/rebuild.git" rev-parse test)" = "$(git rev-parse test)"
+# A clean clone rebuilding test keeps finished remote work even without a local checkout.
+git clone -q "$GH/repos/rebuild.git" "$T/second-machine"
+git -C "$T/second-machine" switch -qc fix/remote-only
+git -C "$T/second-machine" commit --allow-empty -qm remote-work
+git -C "$T/second-machine" push -qu origin fix/remote-only
+remote_only="$(git -C "$T/second-machine" rev-parse HEAD)"
+pi-test-branch rebuild >/dev/null 2>&1
+check "rebuild keeps eligible branches published by another clone" git merge-base --is-ancestor "$remote_only" test
+before_preview="$(git -C "$GH/repos/rebuild.git" show-ref)"
+old_test="$(git rev-parse test)"
+pi-test-branch rebuild --dry-run > "$LOG/preview" 2>&1
+check "rebuild preview reports the target branch" grep -q 'would rebuild test' "$LOG/preview"
+check "rebuild preview preserves local test" test "$(git rev-parse test)" = "$old_test"
+check "rebuild preview preserves remote refs" test "$(git -C "$GH/repos/rebuild.git" show-ref)" = "$before_preview"
+
+# An existing user's file and a failed adoption must stay where they were.
+mkdir -p "$T/custom dir"
+echo sentinel > "$T/custom dir/sentinel"
+check "missing live branch is reported" bash -c " ! pi-test-branch live-set --adopt '$T/custom dir' no-such-branch"
+check "failed adoption preserves the existing folder" grep -qx sentinel "$T/custom dir/sentinel"
+(cd "$R" && pi-branch fix/remote-only >"$LOG/remote-checkout" 2>&1)
+check "pi-branch resumes an existing remote branch" test "$(git rev-parse HEAD)" = "$remote_only"
 # ---- pr-only guard -----------------------------------------------------------------------------
 echo "guards"
 ESBUILD=(npx -y esbuild@0.28.2)

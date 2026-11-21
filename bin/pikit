@@ -100,6 +100,8 @@ status)
 	echo "deployed:  $DEPLOY → follows $b @ $(git -C "$DEPLOY" log -1 --format='%h %s')"
 	if [[ -z "$want" ]]; then echo "           $b no longer exists — pikit apply goes back to main"
 	elif [[ "$want" != "$have" ]]; then echo "           update waiting: ${want:0:7} — run: pikit apply"
+	elif [[ ! -f "$LOGDIR/installed.sha" || "$(<"$LOGDIR/installed.sha")" != "$have" ]]; then
+		echo "           installation pending — run: pikit apply"
 	else echo "           up to date"; fi
 	if [[ -f "$AGENT_DIR/.kit-manifest" ]]; then
 		mapfile -t extra < <(for d in agents prompts skills extensions; do

@@ -13,7 +13,7 @@ if ! [[ "$name" =~ ^(feat|fix|chore|docs)/[a-z0-9][a-z0-9._-]*$ ]]; then
 fi
 root="$(git rev-parse --show-toplevel 2>/dev/null)" || { echo "pi-branch: not inside a git repo" >&2; exit 1; }
 G() { git -C "$root" "$@"; }
-has_origin() { G remote | grep -qx origin; }
+has_origin() { [[ "$(G config --local --get pi.github)" != false ]] && G remote | grep -qx origin; }
 
 if G rev-parse -q --verify "refs/heads/$name" >/dev/null; then
 	G switch -q "$name"
@@ -23,8 +23,19 @@ fi
 
 base="main"
 if has_origin; then
-	G fetch -q origin
+	G fetch -q --prune origin
+	if G show-ref --verify --quiet "refs/remotes/origin/$name"; then
+		G switch -q --track -c "$name" "origin/$name"
+		echo "on existing GitHub branch $name"
+		exit 0
+	fi
 	G rev-parse -q --verify refs/remotes/origin/main >/dev/null && base="origin/main"
+elif [[ "$(G config --local --get pi.github)" == false ]]; then
+	setup="$(G config --local --get pi.localSetup || true)"
+	if [[ -n "$setup" ]] && ! G merge-base --is-ancestor "$setup" main; then
+		G merge-base --is-ancestor main "$setup" || { echo "pi-branch: local main changed; rerun pinew --no-github to refresh setup" >&2; exit 1; }
+		base="$setup"
+	fi
 fi
 G rev-parse -q --verify "$base^{commit}" >/dev/null || { echo "pi-branch: no main branch yet" >&2; exit 1; }
 

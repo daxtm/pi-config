@@ -130,7 +130,10 @@ while IFS= read -r -d '' f; do install_file "$f" "$AGENT_DIR/skills/${f#"$KIT_DI
 	< <(find "$KIT_DIR/global/skills" -type f -print0)
 
 # subagent extension: Pi's official example for the pi version you run
-if (( DRY_RUN )); then echo "   [dry-run] fetch the subagent example from $PI_PKG@$PI_HAVE"; else
+if (( DRY_RUN )); then
+	echo "   [dry-run] fetch the subagent example from $PI_PKG@$PI_HAVE"
+	MANIFEST+=(extensions/subagent/index.ts extensions/subagent/agents.ts)
+else
 	mkdir -p "$TMP_DIR/pi-pkg"
 	tarball="$(npm pack --silent --pack-destination "$TMP_DIR/pi-pkg" "$PI_PKG@$PI_HAVE" | tail -n1)"
 	tar -xzf "$TMP_DIR/pi-pkg/$tarball" -C "$TMP_DIR/pi-pkg" package/examples/extensions/subagent
@@ -297,6 +300,7 @@ if (( ! DRY_RUN )); then
 fi
 
 echo
-ok "pi-config installed into $AGENT_DIR from $KIT_DIR"
+if (( DRY_RUN )); then ok "preview complete for $AGENT_DIR"
+else ok "pi-config installed into $AGENT_DIR from $KIT_DIR"; fi
 (( PATH_CHANGED )) && warn "PATH updated in $ZSHRC — run: exec zsh"
 exit 0

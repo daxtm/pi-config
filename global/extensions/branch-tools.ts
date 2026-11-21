@@ -150,12 +150,15 @@ export default function (pi: ExtensionAPI) {
 			if (!(await isKitRepo(ctx.cwd))) {
 				return ctx.ui.notify("This project isn't set up by the kit. Run pinew in it first.", "warning");
 			}
-			if ((args ?? "").trim() === "rebuild") {
-				const rb = await script(ctx.cwd, ["rebuild"], 3_600_000);
+			const arg = (args ?? "").trim();
+			if (arg === "rebuild" || arg === "rebuild --dry-run") {
+				const rb = await script(ctx.cwd, arg.split(/\s+/), 3_600_000);
 				ctx.ui.notify(rb.out, rb.ok ? "info" : "error");
 				return refreshStatus(ctx as unknown as Ctx);
 			}
-			await script(ctx.cwd, ["--quiet", "--fetch"], 3_600_000);
+			if (arg) return ctx.ui.notify("Usage: /test-branch [rebuild [--dry-run]]", "warning");
+			const sync = await script(ctx.cwd, ["--quiet", "--fetch"], 3_600_000);
+			if (!sync.ok) return ctx.ui.notify(sync.out || "Test branch sync failed", "error");
 			const st = await script(ctx.cwd, ["status"]);
 			ctx.ui.notify(st.out, st.out.includes("conflict:") ? "warning" : "info");
 			await refreshStatus(ctx as unknown as Ctx);

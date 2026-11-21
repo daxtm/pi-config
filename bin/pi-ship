@@ -28,6 +28,7 @@ branch="${1:-$(G branch --show-current)}"
 [[ -n "$branch" ]] || die "you're not on a branch — name one: /ship <branch>"
 [[ "$branch" =~ ^(main|master|test)$ ]] && die "$branch is never shipped — ship the feature branch instead"
 G rev-parse -q --verify "refs/heads/$branch" >/dev/null || die "no local branch named $branch"
+[[ "$(G config --local --get pi.github)" != false ]] || die "GitHub is disabled for this project — run pinew to enable it"
 G remote | grep -qx origin || die "no GitHub remote — run: pi-gh-setup (or pinew) in this project"
 command -v gh >/dev/null && gh auth status >/dev/null 2>&1 || die "gh isn't logged in — run: gh auth login"
 
@@ -39,7 +40,7 @@ while read -r line; do
 	"branch refs/heads/$branch") checkout="$wt" ;;
 	esac
 done < <(G worktree list --porcelain)
-if [[ -n "$checkout" && -n "$(git -C "$checkout" status --porcelain --untracked-files=no)" ]]; then
+if [[ -n "$checkout" && -n "$(git -C "$checkout" status --porcelain)" ]]; then
 	die "uncommitted changes on $branch in $checkout — commit them first (ask pi, or /commit)"
 fi
 
@@ -150,5 +151,5 @@ else
 fi
 
 # `test` picks up the archive commit in the background
-[[ -x "$KIT_DIR/bin/pi-test-branch" ]] && ( "$KIT_DIR/bin/pi-test-branch" --repo "$root" --quiet >/dev/null 2>&1 & )
+[[ "$(G config --local --get pi.kit)" == true && -x "$KIT_DIR/bin/pi-test-branch" ]] && ( "$KIT_DIR/bin/pi-test-branch" --repo "$root" --quiet >/dev/null 2>&1 & )
 exit 0

@@ -1,0 +1,4 @@
+- [x] 1.1 Reproduce unsafe or incorrect setup, sync and recovery outcomes against the prior repair.
+- [x] 1.2 Correct setup, branch selection, checkout preservation, preview and failure reporting.
+- [x] 1.3 Exercise the real installer, retired link cleanup, MCP discovery and Pi child dispatch.
+- [x] 1.4 Run the repository checks and verify the bundle and published handoff procedure.

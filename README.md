@@ -32,7 +32,7 @@ Scripts (no model): `/ship`, `/cleanup [--dry-run]`, `/switch [branch]`, `/test-
   task in its OpenSpec change is ticked (`/apply` done); `fix/` `chore/` `docs/` branches join with their
   first commit. Unfinished work stays out (`/test-branch` lists what's waiting). A live copy (e.g. a
   ComfyUI node) follows it. Conflicts are resolved by the model, never by you. Nothing ships from `test`.
-  Feature branches are pushed to GitHub automatically after every commit.
+  In GitHub-enabled projects, commit hooks push feature branches. A conditional push checks the expected remote tip so a stale hook cannot recreate a deleted branch.
 - `main` — changes only when you merge a PR. Merge with **Create a merge commit**.
 
 ## New projects: `pinew <name>`
@@ -55,7 +55,7 @@ is skipped. Checkout and installation share a deployment lock.
 `pinew --no-github` keeps setup local, including later automatic test-branch syncs. Running `pinew`
 again without that option re-enables GitHub sync. Existing-project setup leaves unrelated untracked
 files out of its commits. `/test-branch rebuild` discards stale test history even when there are no
-eligible feature branches left.
+eligible feature branches left. Finished branches on origin are included even when this clone has never checked them out. Preview with `/test-branch rebuild --dry-run`. If incoming files collide with local untracked files in a test checkout, sync stops and preserves the files.
 
 Run `scripts/check.sh` to verify changes. OpenSpec 2.1.1 and esbuild 0.28.2 (or npx to fetch it) are
 required; missing behavior-test dependencies fail the checks. ShellCheck runs when installed.

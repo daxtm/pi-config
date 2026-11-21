@@ -54,50 +54,71 @@ fi
 PROJECT_DIR="$(pwd -P)"
 PROJECT_NAME="$(basename "$PROJECT_DIR")"
 
-# 1. Git, and where the setup files go
-git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { git init -q -b main; echo "git        initialised (branch main)"; }
-HAS_HEAD=0; git rev-parse -q --verify HEAD >/dev/null && HAS_HEAD=1
-HAS_ORIGIN=0; git remote get-url origin >/dev/null 2>&1 && HAS_ORIGIN=1
-SETUP_BRANCH=""; RETURN_TO=""
-# Existing projects always receive setup on a work branch. Local-only setup disables the
-# automatic remote sync too, so --no-github cannot push through the test-branch hook.
-if (( GITHUB )); then git config --local --unset pi.github 2>/dev/null || true
-else git config --local pi.github false; fi
-mapfile -d '' -t USER_UNTRACKED < <(git ls-files --others --exclude-standard -z)
-if (( HAS_HEAD )); then
-	[ -z "$(git status --porcelain --untracked-files=no)" ] || { echo "ERROR: commit or stash your changes first (git status)" >&2; exit 1; }
-	if (( HAS_ORIGIN && GITHUB )); then
-		git fetch -q --prune origin
-		if ! git rev-parse -q --verify refs/remotes/origin/main >/dev/null; then
-			src=""; from=""
-			if git rev-parse -q --verify refs/heads/main >/dev/null; then src="$(git rev-parse refs/heads/main)"; from="your local main"
-			else
-				def="$(git ls-remote --symref origin HEAD 2>/dev/null | sed -n 's|^ref: refs/heads/\([^[:space:]]*\)[[:space:]]*HEAD$|\1|p')"
-				if [ -n "$def" ] && git rev-parse -q --verify "refs/remotes/origin/$def" >/dev/null; then
-					src="$(git rev-parse "refs/remotes/origin/$def")"; from="GitHub's default branch $def"
-				else src="$(git rev-parse HEAD)"; from="the current commit"; fi
-			fi
-			git push -q --force-with-lease=refs/heads/main: origin "$src:refs/heads/main" \
-				|| { echo "ERROR: couldn't create main on GitHub (nothing else was changed)" >&2; exit 1; }
-			git fetch -q origin
-			echo "github     the repo had no main — created it from $from (${src:0:7})"
-		fi
-	fi
-	RETURN_TO="$(git branch --show-current)"
-	SETUP_BRANCH="chore/pi-setup-$(date +%Y%m%d-%H%M%S)-$$"
-	base=HEAD
-	if (( GITHUB && HAS_ORIGIN )); then base=origin/main
-	elif git rev-parse -q --verify refs/heads/main >/dev/null; then base=main; fi
-	git switch -q --no-track -c "$SETUP_BRANCH" "$base"
-	echo "git        setup goes on $SETUP_BRANCH (from $base)"
-fi
-
 # 2. OpenSpec (the kit's pinned CLI)
 OPENSPEC_BIN=""
 # shellcheck disable=SC1091
 [ -f "$KIT_DIR/.kit-paths" ] && . "$KIT_DIR/.kit-paths"
 [ -n "$OPENSPEC_BIN" ] && [ -x "$OPENSPEC_BIN" ] || OPENSPEC_BIN="$(command -v openspec || true)"
 [ -n "$OPENSPEC_BIN" ] || { echo "ERROR: openspec not found — run: pikit apply" >&2; exit 1; }
+
+# 1. Git, and where the setup files go
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { git init -q -b main; echo "git        initialised (branch main)"; }
+HAS_HEAD=0; git rev-parse -q --verify HEAD >/dev/null && HAS_HEAD=1
+HAS_ORIGIN=0; git remote get-url origin >/dev/null 2>&1 && HAS_ORIGIN=1
+SETUP_BRANCH=""; RETURN_TO=""
+if [[ "$(git rev-parse --show-toplevel)" != "$PROJECT_DIR" ]]; then
+	echo "ERROR: run pinew from the project root: $(git rev-parse --show-toplevel)" >&2; exit 1
+fi
+if [[ -n "$(git status --porcelain --untracked-files=no)" ]]; then
+	echo "ERROR: commit or stash your changes first (git status)" >&2; exit 1
+fi
+declare -A USER_UNTRACKED=()
+while IFS= read -r -d '' file; do USER_UNTRACKED["$file"]=1; done < <(git ls-files --others --exclude-standard -z)
+if (( HAS_HEAD )); then
+	if (( HAS_ORIGIN && GITHUB )); then
+		git fetch -q --prune origin
+		# Single-branch clones may omit an existing remote main from their fetch refspec.
+		if git ls-remote --exit-code origin refs/heads/main >/dev/null; then
+			git fetch -q origin +refs/heads/main:refs/remotes/origin/main
+		elif [[ $? == 2 ]]; then
+			# Use the advertised remote default, even if the local main contains unpublished work.
+			remote_head="$(git ls-remote --symref origin HEAD)"
+			src="$(awk '$2 == "HEAD" && $1 != "ref:" {print $1}' <<<"$remote_head")"
+			from="GitHub's default branch"
+			if [[ -z "$src" ]]; then
+				[[ -z "$(git ls-remote --heads origin)" ]] || { echo "ERROR: remote has branches but no resolvable default" >&2; exit 1; }
+				src="$(git rev-parse --verify refs/heads/main 2>/dev/null || git rev-parse HEAD)"
+				from="local history (empty remote)"
+			else git fetch -q origin HEAD; fi
+			git push -q --force-with-lease=refs/heads/main: origin "$src:refs/heads/main" \
+				|| { echo "ERROR: couldn't create main on GitHub (nothing else was changed)" >&2; exit 1; }
+			git fetch -q origin refs/heads/main:refs/remotes/origin/main
+			echo "github     the repo had no main — created it from $from (${src:0:7})"
+		else echo "ERROR: could not read remote main" >&2; exit 1
+		fi
+	fi
+	# A never-published repo bootstraps main locally. A repo with an origin gets a setup branch.
+	RETURN_TO="$(git branch --show-current)"
+	original_tip="$(git rev-parse HEAD)"
+	if (( ! HAS_ORIGIN || ! GITHUB )) && ! git show-ref --verify --quiet refs/heads/main; then
+		git branch main HEAD
+	fi
+	if (( HAS_ORIGIN )); then
+		SETUP_BRANCH="chore/pi-setup-$(date +%Y%m%d-%H%M%S)-$$"
+		base=main
+		(( ! GITHUB )) || base=origin/main
+		git switch -q --no-track -c "$SETUP_BRANCH" "$base"
+		echo "git        setup goes on $SETUP_BRANCH (from $base)"
+	else
+		git switch -q main
+	fi
+elif [[ "$(git branch --show-current)" != main ]]; then
+	git symbolic-ref HEAD refs/heads/main
+fi
+if (( GITHUB )); then git config --local --unset pi.github 2>/dev/null || true
+else git config --local pi.github false; fi
+
+# Initialize OpenSpec after selecting the setup branch.
 HAD_CONFIG=0; [ -e openspec/config.yaml ] && HAD_CONFIG=1
 out="$(OPENSPEC_TELEMETRY=0 "$OPENSPEC_BIN" init --tools pi --scope project --no-animation . 2>&1)" \
 	|| { echo "$out" >&2; echo "ERROR: openspec init failed" >&2; exit 1; }
@@ -153,20 +174,19 @@ done
 echo "git        hooks keep the test branch up to date"
 
 # 6. Commit the setup; existing projects retain their unrelated untracked files.
-if (( HAS_HEAD )); then
-	git add -u
-	while IFS= read -r -d '' file; do
-		keep=0
-		for prior in "${USER_UNTRACKED[@]}"; do [[ "$file" != "$prior" ]] || { keep=1; break; }; done
-		(( keep )) || git add -- "$file"
-	done < <(git ls-files --others --exclude-standard -z)
-else git add -A; fi
+git add -u
+while IFS= read -r -d '' file; do
+	[[ -n "${USER_UNTRACKED[$file]:-}" ]] || git --literal-pathspecs add -- "$file"
+done < <(git ls-files --others --exclude-standard -z)
 if git diff --cached --quiet; then
 	echo "git        nothing new to commit"
 else
 	PI_TEST_BRANCH=1 git commit -q -m "chore: set up the pi workflow (OpenSpec, ADRs, CI)"
 	echo "git        committed the setup on $(git branch --show-current)"
 fi
+
+if (( ! GITHUB )); then git config --local pi.localSetup "$(git rev-parse HEAD)"
+else git config --local --unset pi.localSetup 2>/dev/null || true; fi
 
 # 7. GitHub
 if (( GITHUB )); then
@@ -180,23 +200,23 @@ if (( GITHUB )); then
 			gh repo create "$PROJECT_NAME" "$VISIBILITY" --source . --remote origin >/dev/null
 			git push -q -u origin main
 			echo "github     created ${VISIBILITY#--} repo $(gh repo view --json nameWithOwner -q .nameWithOwner) and pushed main"
-			"$KIT_DIR/bin/pi-gh-setup" "$PROJECT_DIR" || true
+			"$KIT_DIR/bin/pi-gh-setup" "$PROJECT_DIR"
 		fi
 	else
 		if [ -z "$SETUP_BRANCH" ] && ! git ls-remote --exit-code -q origin main >/dev/null 2>&1; then
 			git push -q -u origin main   # an empty GitHub repo: main goes up first
 			echo "github     pushed main"
 		fi
-		"$KIT_DIR/bin/pi-gh-setup" "$PROJECT_DIR" || true
+		"$KIT_DIR/bin/pi-gh-setup" "$PROJECT_DIR"
 		if [ -n "$SETUP_BRANCH" ]; then
 			if git diff --quiet "${base:-main}" HEAD; then
-				git switch -q "$RETURN_TO" 2>/dev/null || git switch -q --detach "${base:-main}"
+				git switch -q "$RETURN_TO" 2>/dev/null || git switch -q --detach "$original_tip"
 				git branch -q -D "$SETUP_BRANCH"
 				echo "git        already set up — nothing to ship"
 			else
 				git push -q -u origin "$SETUP_BRANCH"
-				"$KIT_DIR/bin/pi-ship" "$SETUP_BRANCH" || echo "github     couldn't open the PR — run: pi-ship $SETUP_BRANCH"
-				[ -n "$RETURN_TO" ] && git switch -q "$RETURN_TO"
+				"$KIT_DIR/bin/pi-ship" "$SETUP_BRANCH" || { echo "github     retry: pi-ship $SETUP_BRANCH" >&2; exit 1; }
+				if [[ -n "$RETURN_TO" ]]; then git switch -q "$RETURN_TO"; else git switch -q --detach "$original_tip"; fi
 			fi
 		fi
 	fi

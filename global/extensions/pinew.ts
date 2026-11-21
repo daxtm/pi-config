@@ -18,7 +18,7 @@ export default function (pi: ExtensionAPI) {
 		description: "Set up a new project (or an existing folder) and move this session into it: /pinew <name|/path> [--live <path>]",
 		handler: async (args, ctx) => {
 			const argv = (args ?? "").trim().split(/\s+/).filter(Boolean).map((a) => (a.startsWith("~/") ? path.join(os.homedir(), a.slice(2)) : a));
-			if (argv.length === 0) return ctx.ui.notify("Usage: /pinew <name|/path> [--live <path>]", "warning");
+			if (argv.length === 0) argv.push(ctx.cwd);
 			await ctx.waitForIdle();
 			const cdFile = path.join(os.tmpdir(), `pinew-${process.pid}-${Date.now()}`);
 			ctx.ui.notify(`Setting up ${argv[0]}…`, "info");
