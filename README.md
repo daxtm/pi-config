@@ -7,3 +7,8 @@ The builder exercises the real entry point. A direct feat branch marks its final
 Run pi-check --force HEAD to repeat a committed check. New scaffolds accept documentation only until a builder adds the project tests to scripts/check.sh. /cleanup preserves tips outside origin/main. pinew upgrades original project templates and preserves customized files. Inspect customized CI separately. Existing test history can be refreshed with pi-test-branch rebuild after reviewing --dry-run.
 
 For a reproducible kit defect, run pikit repair with the failing command and its error as a description. It uses an isolated config worktree, the configured builder, the local gate and a separate PR. Merge the fix, deploy with pikit apply, which retries the original command once if its checkout still matches (supply the command and arguments after the description). Live configuration is generated from the deployed checkout. User settings and authentication are retained.
+
+
+Use the same builder task ID for follow-ups on the same branch and a fresh ID for unrelated work. Sessions are stored locally under the agent directory and run one process at a time. Background preview sync uses Git's recorded conflict resolutions and preserves the last passing preview when a new conflict appears. Explicit shipping can ask the resolver to handle its conflict with main.
+
+The installer prefers GPT-6.2 Sol when the authenticated Pi catalog lists it and uses GPT-6.1 Sol otherwise. Keep OpenCode Go Extra Usage off if you want subscription-only usage. Evaluate builder changes with comparable acceptance checks and record first-pass success, tokens, retries and allowance per accepted change.

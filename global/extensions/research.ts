@@ -2,7 +2,7 @@
  * /research <question> — runs the researcher agent directly: same model, tools and instructions as
  * ~/.pi/agent/agents/researcher.md, in a separate pi process. The main session never decides
  * whether to pass the question on, and spends no tokens routing it. The answer is added to the
- * conversation (so you can ask follow-ups) without starting a main-session turn.
+ * conversation for display, and excluded from the model context.
  * Takes precedence over prompts/research.md. Installed by pi-config.
  */
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -32,6 +32,10 @@ function readAgent(file: string): Agent {
 }
 
 export default function (pi: ExtensionAPI) {
+	pi.on("context", (event) => ({
+		messages: event.messages.filter((message) =>
+			!(message.role === "custom" && "customType" in message && message.customType === "research")),
+	}));
 	pi.registerCommand("research", {
 		description: "Research a question with the researcher agent directly (web by default): /research <question>",
 		handler: async (args, ctx) => {
@@ -51,7 +55,7 @@ export default function (pi: ExtensionAPI) {
 				dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-research-"));
 				const promptFile = path.join(dir, "researcher.md");
 				fs.writeFileSync(promptFile, agent.prompt);
-				const argv = ["-p", "--no-session"];
+				const argv = ["-p", "--no-session", "--no-context-files", "--no-skills"];
 				if (agent.model) argv.push("--model", agent.model);
 				if (agent.tools) argv.push("--tools", agent.tools);
 				argv.push("--append-system-prompt", promptFile, `Task: ${question}`);
